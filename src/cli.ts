@@ -7,10 +7,16 @@ const HELP = `cody — a terminal-native, model-agnostic coding assistant.
 
 Usage:
   cody [options]
+  cody config            Print the resolved configuration and exit.
+  cody model [role]      Show the model a role resolves to (default: agent).
 
 Options:
-  -h, --help       Show this help and exit.
-  -v, --version    Show the version and exit.
+  -h, --help             Show this help and exit.
+  -v, --version          Show the version and exit.
+  --model <name>         Use catalog model <name> for the agent role.
+  --mode <mode>          Permission mode: supervised | auto | readonly.
+  --auto                 Shortcut for --mode auto (unsupervised).
+  --readonly             Shortcut for --mode readonly.
 
 cody stays cooperative with your terminal: no full-screen takeover, native
 scrollback and copy/paste preserved. The interactive REPL arrives in a later
