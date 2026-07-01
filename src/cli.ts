@@ -9,6 +9,7 @@ Usage:
   cody [options]
   cody config            Print the resolved configuration and exit.
   cody model [role]      Show the model a role resolves to (default: agent).
+  cody tools             List the tools and their permission policy.
 
 Options:
   -h, --help             Show this help and exit.

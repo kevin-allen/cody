@@ -4,6 +4,14 @@ import { readFileSync } from "node:fs";
 import { runCli } from "./cli.js";
 import { loadConfig, modelDefForRole } from "./config.js";
 import { getModel, assertToolCapable } from "./providers/factory.js";
+import { TOOL_INFO, resolvePolicy } from "./tools/index.js";
+
+// Exit quietly when a downstream reader (e.g. `head`, `less`) closes the pipe,
+// rather than crashing on an unhandled EPIPE (FR-37: degrade cleanly when piped).
+process.stdout.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EPIPE") process.exit(0);
+  throw err;
+});
 
 /** Read the package version from the shipped package.json (next to dist/). */
 function readVersion(): string {
@@ -25,6 +33,21 @@ function main(): void {
     const agent = modelDefForRole(config, "agent");
     process.stdout.write(`${JSON.stringify(config, null, 2)}\n`);
     process.stdout.write(`\nagent role -> ${agent.provider}:${agent.model}\n`);
+    return;
+  }
+
+  if (command === "tools") {
+    const config = loadConfig({ cwd: process.cwd(), env: process.env, argv: argv.slice(1) });
+    process.stdout.write(`permission mode: ${config.permissions.mode}\n\n`);
+    for (const t of TOOL_INFO) {
+      const policy = resolvePolicy(config.permissions, t.action);
+      process.stdout.write(
+        `  ${t.name.padEnd(12)} ${t.action.padEnd(6)} ${policy.padEnd(6)} ${t.description}\n`,
+      );
+    }
+    process.stdout.write(
+      `\nshell denylist (applies in every mode): ${config.permissions.shell.deny.join(", ")}\n`,
+    );
     return;
   }
 
