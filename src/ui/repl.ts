@@ -27,11 +27,16 @@ export function parseSlash(input: string): SlashCommand {
   return "unknown";
 }
 
+/** Whether a bare line is an attempt to quit without the slash (exit / quit). */
+export function isBareQuit(input: string): boolean {
+  return /^(exit|quit)$/i.test(input.trim());
+}
+
 function helpText(p: Palette): string {
   return [
     `${p.bold("/help")}   show this help`,
     `${p.bold("/clear")}  start a fresh conversation`,
-    `${p.bold("/exit")}   quit (or Ctrl-D)`,
+    `${p.bold("/exit")}   quit (or Ctrl-D; plain "exit"/"quit" won't)`,
     "",
   ]
     .map((l) => `  ${l}`)
@@ -171,6 +176,11 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     if (busy) return; // ignore input typed while a turn is streaming
     const input = restorePaste(line).trim();
     if (!input) {
+      rl.prompt();
+      return;
+    }
+    if (isBareQuit(input)) {
+      process.stdout.write(p.dim("(use /exit or press Ctrl-D to quit)\n"));
       rl.prompt();
       return;
     }
