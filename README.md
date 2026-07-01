@@ -1,29 +1,139 @@
 # cody
 
 A terminal-native, model-agnostic coding assistant, built in TypeScript on
-LangGraph. It runs in your terminal, edits files and runs commands (with your
-approval), and works against a local model (Ollama) or a hosted one (OpenAI /
-Anthropic) — chosen by config.
+[LangGraph](https://github.com/langchain-ai/langgraphjs). It runs in your
+terminal, reads and searches your codebase, edits files, and runs commands —
+with you approving anything that changes your machine — against a local model
+(Ollama) or a hosted one (OpenAI / Anthropic), chosen by config.
 
-See [`REQUIREMENTS.md`](./REQUIREMENTS.md), [`ARCHITECTURE.md`](./ARCHITECTURE.md),
-and [`VERIFICATION.md`](./VERIFICATION.md) for the design.
+**Design principles** (see [`REQUIREMENTS.md`](./REQUIREMENTS.md)):
 
-> Status: early scaffold (milestone 1). The interactive agent is not wired up
-> yet — `cody --help` / `--version` work today.
+- **Terminal-native** — cody never takes over your terminal: no alternate
+  screen, no full-screen TUI, no mouse capture. Native scrollback, your
+  terminal's own copy/paste, and standard control keys keep working, including
+  over SSH and tmux. Multi-line pastes are captured as one input (bracketed
+  paste).
+- **Model-agnostic** — the same agent runs against OpenAI, Anthropic, or a
+  local Ollama model; switching is a config change.
+- **Composable** — line-oriented I/O means cody also runs headless (`cody run`,
+  piping) and unsupervised in a container.
+
+## Install
+
+Requires Node.js ≥ 20.
+
+```bash
+# from source
+git clone https://github.com/kevin-allen/cody && cd cody
+corepack enable                 # provides pnpm
+pnpm install
+pnpm build
+node dist/index.js --help
+
+# or, once published, as a global CLI
+pnpm add -g cody                # then: cody --help
+```
+
+## Quick start
+
+```bash
+cp .env.example .env            # then edit: set OPENAI_API_KEY
+cody                            # start the interactive session
+```
+
+`.env` is git-ignored. cody loads it at startup.
+
+## Configuration
+
+cody resolves configuration in this order (later overrides earlier): built-in
+defaults → `cody.config.json` in the working directory → environment variables
+→ command-line flags.
+
+```jsonc
+// cody.config.json
+{
+  "models": {
+    "default": { "provider": "openai", "model": "gpt-4o", "temperature": 0 }
+    // "fast":  { "provider": "openai",    "model": "gpt-4o-mini" },
+    // "deep":  { "provider": "anthropic", "model": "claude-opus-4-8" },
+    // "local": { "provider": "ollama",    "model": "qwen2.5-coder" }
+  },
+  "roles": {
+    "agent": "default" // which catalog model the agent uses
+  },
+  "permissions": {
+    "mode": "supervised", // supervised (default) | auto | readonly
+    "overrides": {}, // read|write|edit|shell -> allow|ask|deny
+    "shell": { "deny": ["rm\\s+-rf\\s+/", "git\\s+push"] }
+  }
+}
+```
+
+- **Models are a named catalog + role assignments** — define a model once, point
+  any role at it. Adding "use a cheaper model for X later" is a one-line change.
+- **API keys live only in `.env`**, never in the config file: `OPENAI_API_KEY`
+  (default provider), `ANTHROPIC_API_KEY`. Ollama needs none
+  (`OLLAMA_BASE_URL`, default `http://localhost:11434`).
+- Quick overrides: `--model deep` / `CODY_AGENT_MODEL=deep`;
+  `--mode auto` / `--auto`, `--readonly`, `CODY_MODE=auto`.
+
+### Permissions
+
+| Mode                   | read  | write / edit / shell |
+| ---------------------- | ----- | -------------------- |
+| `supervised` (default) | allow | ask (`[y/N]`)        |
+| `auto` (unsupervised)  | allow | allow                |
+| `readonly`             | allow | deny                 |
+
+Writes and edits show a diff before asking; shell commands show the exact
+command. A shell **denylist** blocks matching commands in *every* mode,
+including `auto`. All file access is confined to the working directory.
+
+Use `auto` only in a sandbox you trust (e.g. a container) — cody does no
+OS-level isolation itself.
+
+## Usage
+
+```
+cody                     Start the interactive session (REPL).
+cody run "<task>"        Run one turn headlessly and print the result.
+cody config              Print the resolved configuration.
+cody model [role]        Show the model a role resolves to.
+cody tools               List the tools and their permission policy.
+cody --help | --version
+```
+
+In the REPL: type a request; `/help`, `/clear`, `/exit` (or Ctrl-D). Ctrl-C
+cancels the current turn.
+
+## Docker
+
+Runs cody unsupervised in an isolated container (the intended way to use
+`auto` mode). Mount your project and pass credentials at run time:
+
+```bash
+docker build -t cody .
+docker run -it --rm -v "$PWD":/workspace --env-file .env cody run --auto "fix the failing test"
+```
+
+Behind a corporate proxy, forward it to the build:
+`docker build --build-arg HTTPS_PROXY="$HTTPS_PROXY" -t cody .`
+
+## Networks / proxies
+
+cody honors the standard `HTTP(S)_PROXY` / `NO_PROXY` environment variables for
+hosted-provider traffic (Node's `fetch` ignores them by default), so it works
+behind a corporate proxy while local providers on `NO_PROXY` hosts bypass it.
 
 ## Develop
 
-Requires Node ≥ 20 and pnpm.
-
 ```bash
-pnpm install
-pnpm dev --help        # run from source
-pnpm build && pnpm start --help
-pnpm test              # unit + integration tests
+pnpm dev --help        # run from source (tsx)
+pnpm test              # unit + integration tests (vitest)
 pnpm lint              # eslint
 pnpm format:check      # prettier
 pnpm typecheck         # tsc --noEmit
+pnpm build             # compile to dist/
 ```
 
-Copy `.env.example` to `.env` and set `OPENAI_API_KEY` (default provider).
-`.env` is git-ignored.
+See [`ARCHITECTURE.md`](./ARCHITECTURE.md) and [`VERIFICATION.md`](./VERIFICATION.md).

@@ -47,3 +47,12 @@ jobs:
           npm install "$RUNNER_TEMP"/cody-*.tgz
           ./node_modules/.bin/cody --version
           ./node_modules/.bin/cody --help
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build -t cody:ci .
+      - name: Run the CLI inside the image
+        run: docker run --rm cody:ci --help
