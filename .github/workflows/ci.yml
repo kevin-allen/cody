@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm format:check
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+
+  pack-and-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Pack the tarball
+        run: pnpm pack --pack-destination "$RUNNER_TEMP"
+      - name: Install the tarball into a clean project and run the CLI
+        run: |
+          set -euxo pipefail
+          workdir="$(mktemp -d)"
+          cd "$workdir"
+          npm init -y >/dev/null
+          npm install "$RUNNER_TEMP"/cody-*.tgz
+          ./node_modules/.bin/cody --version
+          ./node_modules/.bin/cody --help

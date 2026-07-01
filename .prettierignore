@@ -1,0 +1,8 @@
+dist
+node_modules
+pnpm-lock.yaml
+.claude
+.env
+.env.*
+# Markdown docs are hand-wrapped; don't reflow them.
+*.md
