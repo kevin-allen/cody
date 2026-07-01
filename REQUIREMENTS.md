@@ -139,6 +139,12 @@ change to the agent graph.
 - FR-17 (capability check): Every model used **must support tool/function
   calling** — cody validates the `agent`-role model at startup and fails with a
   clear message if it (e.g. a small local model) does not.
+- FR-39 (proxy support): cody routes hosted-provider HTTP through the standard
+  proxy environment variables (`HTTP(S)_PROXY`) when set, honoring `NO_PROXY`
+  so local providers (Ollama on localhost) bypass the proxy. Node's built-in
+  `fetch` — used by the provider SDKs — ignores these vars by default, so cody
+  installs a proxy-aware dispatcher at startup. (Needed on corporate networks,
+  e.g. the DKFZ proxy.)
 
 Reference default models per provider (used when authoring catalog entries):
 

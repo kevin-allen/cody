@@ -12,7 +12,7 @@
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
     "verbatimModuleSyntax": true,
-    "declaration": true,
+    "declaration": false,
     "sourceMap": true,
     "esModuleInterop": true,
     "skipLibCheck": true,

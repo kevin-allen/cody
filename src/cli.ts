@@ -7,6 +7,7 @@ const HELP = `cody — a terminal-native, model-agnostic coding assistant.
 
 Usage:
   cody [options]
+  cody run "<task>"      Run one agent turn headlessly and print the result.
   cody config            Print the resolved configuration and exit.
   cody model [role]      Show the model a role resolves to (default: agent).
   cody tools             List the tools and their permission policy.

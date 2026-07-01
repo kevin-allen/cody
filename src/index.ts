@@ -4,7 +4,15 @@ import { readFileSync } from "node:fs";
 import { runCli } from "./cli.js";
 import { loadConfig, modelDefForRole } from "./config.js";
 import { getModel, assertToolCapable } from "./providers/factory.js";
-import { TOOL_INFO, resolvePolicy } from "./tools/index.js";
+import { TOOL_INFO, resolvePolicy, createTools } from "./tools/index.js";
+import type { ApprovalRequest } from "./tools/index.js";
+import { createAgent, streamAgentText } from "./agent/graph.js";
+import { configureProxyFromEnv } from "./net/proxy.js";
+
+// Route hosted-provider HTTP through the standard proxy env vars when set
+// (honoring NO_PROXY, so local Ollama bypasses the proxy). Must run before any
+// model/client is constructed.
+configureProxyFromEnv();
 
 // Exit quietly when a downstream reader (e.g. `head`, `less`) closes the pipe,
 // rather than crashing on an unhandled EPIPE (FR-37: degrade cleanly when piped).
@@ -24,9 +32,38 @@ function readVersion(): string {
   }
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const command = argv[0];
+
+  if (command === "run") {
+    const config = loadConfig({ cwd: process.cwd(), env: process.env, argv: argv.slice(1) });
+    const task = argv
+      .slice(1)
+      .filter((a) => !a.startsWith("-"))
+      .join(" ")
+      .trim();
+    if (!task) {
+      process.stderr.write('cody run: provide a task, e.g. cody run "summarize the README"\n');
+      process.exitCode = 1;
+      return;
+    }
+    const model = getModel(config, "agent");
+    assertToolCapable(model, "agent");
+    // Headless: no interactive prompt exists yet, so an `ask` policy auto-denies.
+    // The interactive REPL (milestone 5) supplies a real prompt. Use --auto to allow.
+    const confirm = (req: ApprovalRequest): Promise<boolean> => {
+      process.stderr.write(
+        `[headless: auto-denying "${req.action}"; re-run with --auto to allow]\n`,
+      );
+      return Promise.resolve(false);
+    };
+    const tools = createTools({ workdir: process.cwd(), config, confirm });
+    const agent = createAgent({ model, tools });
+    for await (const chunk of streamAgentText(agent, task)) process.stdout.write(chunk);
+    process.stdout.write("\n");
+    return;
+  }
 
   if (command === "config") {
     const config = loadConfig({ cwd: process.cwd(), env: process.env, argv: argv.slice(1) });
@@ -66,9 +103,7 @@ function main(): void {
   process.exitCode = result.exitCode;
 }
 
-try {
-  main();
-} catch (err) {
+main().catch((err: unknown) => {
   process.stderr.write(`cody: ${(err as Error).message}\n`);
   process.exitCode = 1;
-}
+});
