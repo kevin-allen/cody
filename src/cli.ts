@@ -6,7 +6,7 @@ export interface CliResult {
 const HELP = `cody — a terminal-native, model-agnostic coding assistant.
 
 Usage:
-  cody [options]
+  cody [options]         Start the interactive session (REPL).
   cody run "<task>"      Run one agent turn headlessly and print the result.
   cody config            Print the resolved configuration and exit.
   cody model [role]      Show the model a role resolves to (default: agent).
@@ -21,8 +21,7 @@ Options:
   --readonly             Shortcut for --mode readonly.
 
 cody stays cooperative with your terminal: no full-screen takeover, native
-scrollback and copy/paste preserved. The interactive REPL arrives in a later
-milestone.`;
+scrollback and copy/paste preserved.`;
 
 /**
  * Pure CLI dispatch: given the argv slice and the resolved version, return the
@@ -36,9 +35,9 @@ export function runCli(argv: readonly string[], version: string): CliResult {
   if (argv.includes("-v") || argv.includes("--version")) {
     return { output: version, exitCode: 0 };
   }
-  // Interactive REPL is not implemented yet (milestone 5).
+  // Fallback text; the entrypoint routes a bare invocation to the REPL instead.
   return {
-    output: `cody ${version}\nInteractive mode is not implemented yet. Run \`cody --help\`.`,
+    output: `cody ${version} — run \`cody\` to start the interactive session, or \`cody --help\` for usage.`,
     exitCode: 0,
   };
 }

@@ -8,6 +8,7 @@ import { TOOL_INFO, resolvePolicy, createTools } from "./tools/index.js";
 import type { ApprovalRequest } from "./tools/index.js";
 import { createAgent, streamAgentText } from "./agent/graph.js";
 import { configureProxyFromEnv } from "./net/proxy.js";
+import { startRepl } from "./ui/repl.js";
 
 // Route hosted-provider HTTP through the standard proxy env vars when set
 // (honoring NO_PROXY, so local Ollama bypasses the proxy). Must run before any
@@ -35,6 +36,18 @@ function readVersion(): string {
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const command = argv[0];
+
+  if (
+    argv.includes("-h") ||
+    argv.includes("--help") ||
+    argv.includes("-v") ||
+    argv.includes("--version")
+  ) {
+    const result = runCli(argv, readVersion());
+    process.stdout.write(`${result.output}\n`);
+    process.exitCode = result.exitCode;
+    return;
+  }
 
   if (command === "run") {
     const config = loadConfig({ cwd: process.cwd(), env: process.env, argv: argv.slice(1) });
@@ -98,9 +111,9 @@ async function main(): Promise<void> {
     return;
   }
 
-  const result = runCli(argv, readVersion());
-  process.stdout.write(`${result.output}\n`);
-  process.exitCode = result.exitCode;
+  // No recognized subcommand -> start the interactive REPL.
+  const config = loadConfig({ cwd: process.cwd(), env: process.env, argv });
+  await startRepl({ cwd: process.cwd(), config, version: readVersion() });
 }
 
 main().catch((err: unknown) => {
