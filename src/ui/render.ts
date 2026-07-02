@@ -106,8 +106,12 @@ export function formatSessionList(sessions: SessionMeta[], p: Palette, currentId
       const marker = s.id === currentId ? "*" : " ";
       const tokens = (s.inputTokens ?? 0) + (s.outputTokens ?? 0);
       const preview = s.preview ?? "";
-      // id, updatedAt, tokens, preview(dimmed)
-      return `${index} ${marker} ${s.id} ${s.updatedAt} ${tokens} ${p.dim(preview)}`;
+      const title = s.title ?? "";
+      // display title when non-empty (plain), otherwise dim the preview
+      const meta = title.length > 0 ? title : preview;
+      const styled = title.length > 0 ? meta : p.dim(meta);
+      // id, updatedAt, tokens, meta
+      return `${index} ${marker} ${s.id} ${s.updatedAt} ${tokens} ${styled}`;
     })
     .join("\n") + "\n";
 }

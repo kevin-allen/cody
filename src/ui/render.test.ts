@@ -87,8 +87,8 @@ describe("formatSessionList", () => {
 
   it("marks current session and formats lines", () => {
     const s: SessionMeta[] = [
-      { id: "s-one", createdAt: "", updatedAt: "u1", preview: "preview1", inputTokens: 1, outputTokens: 2 },
-      { id: "s-two", createdAt: "", updatedAt: "u2", preview: "preview2", inputTokens: 3, outputTokens: 4 },
+      { id: "s-one", createdAt: "", updatedAt: "u1", preview: "preview1", title: "", inputTokens: 1, outputTokens: 2 },
+      { id: "s-two", createdAt: "", updatedAt: "u2", preview: "preview2", title: "", inputTokens: 3, outputTokens: 4 },
     ];
     const out = formatSessionList(s, p, "s-two");
     // two lines plus trailing newline
@@ -100,5 +100,19 @@ describe("formatSessionList", () => {
     // second line marked current with "*"
     expect(lines[1]).toContain("*");
     expect(lines[1]).toContain("s-two");
+  });
+
+  it("shows title when present and falls back to preview when empty", () => {
+    const s: SessionMeta[] = [
+      { id: "s-one", createdAt: "", updatedAt: "u1", preview: "preview1", title: "A Title", inputTokens: 1, outputTokens: 2 },
+      { id: "s-two", createdAt: "", updatedAt: "u2", preview: "preview2", title: "", inputTokens: 3, outputTokens: 4 },
+    ];
+    const out = formatSessionList(s, p);
+    const lines = out.trim().split("\n");
+    // first line should contain the title and not the preview
+    expect(lines[0]).toContain("A Title");
+    expect(lines[0]).not.toContain("preview1");
+    // second line should contain the preview because title is empty
+    expect(lines[1]).toContain("preview2");
   });
 });

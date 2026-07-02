@@ -49,3 +49,16 @@ describe("parseSlash with args (resume)", () => {
     expect(p.arg).toBe("ABC");
   });
 });
+
+describe("parseSlash with args (title)", () => {
+  it("parses /title with no arg", () => {
+    const p = parseSlash("/title");
+    expect(p.cmd).toBe("title");
+    expect(p.arg).toBeUndefined();
+  });
+  it("parses /title with arg preserved verbatim", () => {
+    const p = parseSlash('/title  My Title with  spaces\n ');
+    expect(p.cmd).toBe("title");
+    expect(p.arg).toBe("My Title with  spaces");
+  });
+});

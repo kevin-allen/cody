@@ -244,10 +244,11 @@ invasive.
   and meaningful exit codes, no prompts. This shares the code path with `auto`
   mode (§4.4) and is the intended entrypoint for scripts and the Docker image
   (§4.7).
-- FR-40 (persistent sessions): conversation state is stored in SQLite via the LangGraph checkpointer, behind the src/sessions.ts module; enabled by default, sessions.enabled=false restores the in-memory behavior.
+- FR-40 (persistent sessions): conversation state is stored in SQLite via the LangGraph checkpointer, behind the src/sessions.ts module; enabled by default, sessions.enabled=false restores the in-memory behavior. Checkpoint pruning: the latest checkpoint per session is always kept; run `cody sessions prune` to prune older checkpoints across sessions. The REPL also attempts a best-effort prune of the current session when it exits cleanly.
 - FR-41 (--continue resumes the most recent session, --resume <id|index|substring> a specific one; unknown/ambiguous ref exits 1 listing known ids or an error (see src/sessions.ts) ; bare --resume shows an interactive picker to choose a session or start a new one; headless cody run stays stateless).
 - FR-42 (/sessions lists sessions newest-first with id, updated time, token total, preview, current marked with *; REPL supports `/resume <n|id>` to resume a session).
 
+- FR-43 (session titles): sessions gain a `title` column (text, empty when unset). The REPL exposes `/title` to view or set a manual title for the current session. Additionally, cody generates a short best-effort auto-title in the background after the user's first message using the `title` role model (falls back to `default` per FR-14 if unset); very short-lived sessions may keep the original preview instead. Auto-title generation is non-blocking and best-effort.
 ### 4.6 Configuration
 
 - FR-28: Config resolution order (later overrides earlier): built-in defaults →

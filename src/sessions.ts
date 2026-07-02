@@ -2,12 +2,14 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 import Database from "better-sqlite3";
+import type { RunResult } from "better-sqlite3";
 
 export interface SessionMeta {
   id: string;
   createdAt: string;
   updatedAt: string;
   preview: string;
+  title: string;
   inputTokens: number;
   outputTokens: number;
 }
@@ -24,6 +26,8 @@ export interface SessionStore {
   list(): SessionMeta[];
   latest(): string | undefined;
   has(id: string): boolean;
+  setTitle(id: string, title: string): void;
+  pruneCheckpoints(id: string): number;
   close(): void;
 }
 
@@ -50,20 +54,46 @@ function collapsePreview(s: string): string {
   return s.replace(/\s+/g, " ").trim().slice(0, 80);
 }
 
+export function sanitizeTitle(raw: string): string {
+  // collapse whitespace/newlines to single spaces
+  let s = raw.replace(/\s+/g, " ");
+  s = s.trim();
+  // strip surrounding matching quotes
+  if (s.length >= 2) {
+    const first = s[0];
+    const last = s[s.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      s = s.slice(1, -1).trim();
+    }
+  }
+  // cap to 60 chars
+  if (s.length > 60) s = s.slice(0, 60);
+  return s;
+}
+
 export function openSessionStore(dbPath: string): SessionStore {
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
-  // our index table
+  // our index table (include title for new DBs)
   db.prepare(
     `CREATE TABLE IF NOT EXISTS cody_sessions (
       id TEXT PRIMARY KEY,
       created_at TEXT,
       updated_at TEXT,
       preview TEXT DEFAULT '' ,
+      title TEXT DEFAULT '' ,
       input_tokens INTEGER DEFAULT 0,
       output_tokens INTEGER DEFAULT 0
     )`,
   ).run();
+
+  // Migration: ensure title column exists (older DBs may lack it)
+  const info = db.prepare("PRAGMA table_info(cody_sessions)").all() as { name: string }[];
+  const hasTitle = info.some((r) => r.name === "title");
+  if (!hasTitle) {
+    // empty string literal default
+    db.prepare("ALTER TABLE cody_sessions ADD COLUMN title TEXT DEFAULT ''").run();
+  }
 
   const saver = new SqliteSaver(db);
 
@@ -93,12 +123,13 @@ export function openSessionStore(dbPath: string): SessionStore {
     },
     list: (): SessionMeta[] => {
       const rows = db
-        .prepare("SELECT id, created_at AS createdAt, updated_at AS updatedAt, preview, input_tokens AS inputTokens, output_tokens AS outputTokens FROM cody_sessions ORDER BY updated_at DESC, rowid DESC")
+        .prepare("SELECT id, created_at AS createdAt, updated_at AS updatedAt, preview, title, input_tokens AS inputTokens, output_tokens AS outputTokens FROM cody_sessions ORDER BY updated_at DESC, rowid DESC")
         .all() as {
           id: string;
           createdAt: string;
           updatedAt: string;
           preview: string;
+          title: string;
           inputTokens: number;
           outputTokens: number;
         }[];
@@ -106,13 +137,49 @@ export function openSessionStore(dbPath: string): SessionStore {
     },
     latest: (): string | undefined => {
       const row = db
-        .prepare("SELECT id FROM cody_sessions ORDER BY updated_at DESC, rowid DESC LIMIT 1")
-        .get() as { id: string } | undefined;
+        .prepare("SELECT id, title FROM cody_sessions ORDER BY updated_at DESC, rowid DESC LIMIT 1")
+        .get() as { id: string; title?: string } | undefined;
       return row ? row.id : undefined;
     },
     has: (id: string): boolean => {
       const row = db.prepare("SELECT 1 FROM cody_sessions WHERE id = ?").get(id);
       return !!row;
+    },
+    setTitle: (id: string, title: string) => {
+      const now = nowIso();
+      const row = db.prepare("SELECT 1 FROM cody_sessions WHERE id = ?").get(id);
+      if (!row) return; // unknown id: noop
+      const s = sanitizeTitle(title);
+      db.prepare("UPDATE cody_sessions SET title = ?, updated_at = ? WHERE id = ?").run(s, now, id);
+    },
+    pruneCheckpoints: (id: string): number => {
+      // check if checkpoints table exists
+      const chk = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='checkpoints'")
+        .get();
+      if (!chk) return 0;
+      // find the max checkpoint_id for the thread (lexicographic max)
+      const maxRow = db
+        .prepare("SELECT MAX(checkpoint_id) as maxid FROM checkpoints WHERE thread_id = ?")
+        .get(id) as { maxid?: string } | undefined;
+      const maxid = maxRow?.maxid;
+      if (!maxid) return 0; // nothing to delete
+      // find checkpoint ids to delete
+      const rows = db
+        .prepare("SELECT checkpoint_id FROM checkpoints WHERE thread_id = ? AND checkpoint_id <> ?")
+        .all(id, maxid) as { checkpoint_id: string }[];
+      if (!rows || rows.length === 0) return 0;
+      const ids = rows.map((r) => r.checkpoint_id);
+      const qMarks = ids.map(() => "?").join(",");
+      // delete matching writes if writes table exists
+      const hasWrites = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='writes'").get();
+      if (hasWrites) {
+        db.prepare(`DELETE FROM writes WHERE thread_id = ? AND checkpoint_id IN (${qMarks})`).run(id, ...ids);
+      }
+      // delete checkpoints
+      const del = db.prepare(`DELETE FROM checkpoints WHERE thread_id = ? AND checkpoint_id IN (${qMarks})`).run(id, ...ids) as RunResult;
+      const changed = del.changes ?? 0;
+      return changed;
     },
     close: () => db.close(),
   };

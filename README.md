@@ -59,7 +59,8 @@ defaults → `cody.config.json` in the working directory → environment variabl
     // "local": { "provider": "ollama",    "model": "qwen2.5-coder" }
   },
   "roles": {
-    "agent": "default" // which catalog model the agent uses
+    "agent": "default", // which catalog model the agent uses
+    "title": "nano" // optional: a cheaper model for auto-generated session titles
   },
   "permissions": {
     "mode": "supervised", // supervised (default) | auto | readonly
@@ -89,6 +90,9 @@ defaults → `cody.config.json` in the working directory → environment variabl
   `--mode auto` / `--auto`, `--readonly`, `CODY_MODE=auto`.
 
 ### Permissions
+
+Sessions: sessions get an automatic title generated in the background by the `title` role model (best-effort — very short-lived sessions may keep the first-message preview instead). Use `/title <text>` in the REPL to set a manual title. Run `cody sessions prune` to trim old checkpoints, keeping the latest per session.
+
 
 | Mode                   | read  | write / edit / shell |
 | ---------------------- | ----- | -------------------- |
@@ -125,9 +129,10 @@ cody --help | --version
 cody --continue         Start or resume the most recent REPL session
 cody --resume <id|index|substring>      Resume a specific session by id, index, or a unique id substring
 cody sessions                     List known sessions (headless)
+cody sessions prune               Prune old checkpoints across sessions
 ```
 
-In the REPL: type a request; `/help`, `/clear`, `/sessions`, `/resume <n|id>`, `/exit` (or Ctrl-D). Ctrl-C
+In the REPL: type a request; `/help`, `/clear`, `/sessions`, `/resume <n|id>`, `/title`, `/exit` (or Ctrl-D). Ctrl-C
 cancels the current turn.
 
 ## Docker

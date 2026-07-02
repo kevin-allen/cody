@@ -1,4 +1,6 @@
 import { createInterface } from "node:readline";
+import { HumanMessage } from "@langchain/core/messages";
+import { sanitizeTitle } from "../sessions.js";
 import type { Transform } from "node:stream";
 import { MemorySaver } from "@langchain/langgraph";
 import type { Config } from "../config.js";
@@ -32,7 +34,7 @@ import {
   DISABLE_BRACKETED_PASTE,
 } from "./paste.js";
 
-export type SlashCommand = "exit" | "clear" | "help" | "usage" | "sessions" | "resume" | "unknown";
+export type SlashCommand = "exit" | "clear" | "help" | "usage" | "sessions" | "resume" | "title" | "unknown";
 
 /** Parse a slash command (pure — for testing). */
 export function parseSlash(input: string): { cmd: SlashCommand; arg?: string } {
@@ -51,13 +53,25 @@ export function parseSlash(input: string): { cmd: SlashCommand; arg?: string } {
     rest = body.slice(firstSpace + 1);
   }
   const cmd = token.toLowerCase();
-  const arg = rest ? rest.trim() : undefined;
+  // preserve verbatim-ish arg for /title: remove the single separator leading space if present
+  // and strip trailing spaces/tabs but preserve newlines; otherwise trim.
+  let arg: string | undefined;
+  if (!rest) arg = undefined;
+  else if (cmd === "title") {
+    let a = rest;
+    if (a.startsWith(" ")) a = a.slice(1);
+    a = a.replace(/[ \t]+$/g, "");
+    arg = a;
+  } else {
+    arg = rest.trim();
+  }
   if (cmd === "exit" || cmd === "quit") return { cmd: "exit", arg };
   if (cmd === "clear") return { cmd: "clear", arg };
   if (cmd === "help") return { cmd: "help", arg };
   if (cmd === "usage") return { cmd: "usage", arg };
   if (cmd === "sessions") return { cmd: "sessions", arg };
   if (cmd === "resume") return { cmd: "resume", arg };
+  if (cmd === "title") return { cmd: "title", arg };
   return { cmd: "unknown", arg };
 }
 
@@ -73,6 +87,7 @@ function helpText(p: Palette): string {
     `${p.bold("/usage")}  print token usage totals for this session`,
     `${p.bold("/sessions")} list known sessions (if enabled)`,
     `${p.bold("/resume")}   resume a previous session`,
+    `${p.bold("/title")}   view or set a manual session title`,
     `${p.bold("/exit")}   quit (or Ctrl-D; plain "exit"/"quit" won't)`,
     "",
   ]
@@ -190,6 +205,11 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
   let sessionId: string | undefined;
   // undefined = sessions not used; null = awaiting first input; string = already set to first input consumed? We'll store first input value separately.
   let sessionFirstInputValue: string | null | undefined = undefined;
+  // capture the initial user request for auto-title generation; persists for the session
+  let sessionInitialRequest: string | undefined;
+  // guard concurrent title generations per session id
+  const titleGenerationInFlight = new Map<string, boolean>();
+
   if (store) {
     // resumeTarget takes precedence when provided
     sessionId = deps.resumeTarget ?? store.newSessionId();
@@ -238,6 +258,48 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     // capture first input value for session if applicable
     if (store && sessionFirstInputValue === null) {
       sessionFirstInputValue = input;
+      sessionInitialRequest = input;
+
+      // Auto-title (best-effort): if store present, sessionId set, and session has no manual title,
+      // fire an async background title generation (no await). Guard so we only run one per session at a time.
+      try {
+        if (store && sessionId) {
+          const s = store.list().find((x) => x.id === sessionId);
+          const hasTitle = !!(s && s.title && s.title.length > 0);
+          if (!hasTitle && !titleGenerationInFlight.get(sessionId)) {
+            titleGenerationInFlight.set(sessionId, true);
+            // fire-and-forget
+            (async () => {
+              try {
+                const titleModel = getModel(deps.config, "title");
+                const human = new HumanMessage(
+                  `Write a concise title, at most 8 words, for a coding session that begins with this user request:\n${sessionInitialRequest ?? ""}\nReply with ONLY the title.`,
+                );
+                // invoke the chat model with an array of messages
+                const res = await titleModel.invoke([human]);
+                // chat model invoke returns a single AIMessage-like object with .content
+                const content = (res as { content?: unknown }).content;
+                if (typeof content === "string") {
+                  const t = sanitizeTitle(content);
+                  if (t && t.length > 0) {
+                    try {
+                      store.setTitle(sessionId!, t);
+                    } catch {
+                      // ignore errors
+                    }
+                  }
+                }
+              } catch {
+                // best-effort
+              } finally {
+                titleGenerationInFlight.set(sessionId!, false);
+              }
+            })();
+          }
+        }
+      } catch {
+        // swallow
+      }
     }
 
     busy = true;
@@ -286,6 +348,47 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
             `(tokens: ${turnUsage.inputTokens} in / ${turnUsage.outputTokens} out - session: ${sessionTotal} total)\n`,
           ),
         );
+
+        // Auto-title (best-effort): if store present, sessionId set, and session has no manual title,
+        // fire an async background title generation (no await). Guard so we only run one per session at a time.
+        try {
+          if (store && sessionId) {
+            const s = store.list().find((x) => x.id === sessionId);
+            const hasTitle = !!(s && s.title && s.title.length > 0);
+            if (!hasTitle && !titleGenerationInFlight.get(sessionId)) {
+              titleGenerationInFlight.set(sessionId, true);
+              // fire-and-forget
+              (async () => {
+                try {
+                  const titleModel = getModel(deps.config, "title");
+                  const human = new HumanMessage(
+                    `Write a concise title, at most 8 words, for a coding session that begins with this user request:\n${sessionInitialRequest ?? ""}\nReply with ONLY the title.`,
+                  );
+                  // invoke the chat model with an array of messages
+                  const res = await titleModel.invoke([human]);
+                  // chat model invoke returns a single AIMessage-like object with .content
+                  const content = (res as { content?: unknown }).content;
+                  if (typeof content === "string") {
+                    const t = sanitizeTitle(content);
+                    if (t && t.length > 0) {
+                      try {
+                        store.setTitle(sessionId!, t);
+                      } catch {
+                        // ignore errors
+                      }
+                    }
+                  }
+                } catch {
+                  // best-effort
+                } finally {
+                  titleGenerationInFlight.set(sessionId!, false);
+                }
+              })();
+            }
+          }
+        } catch {
+          // swallow
+        }
       }
     } catch (err) {
       if (currentAbort.signal.aborted) process.stdout.write(`\n${p.dim("(cancelled)")}\n`);
@@ -373,6 +476,27 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
         process.stdout.write(p.dim(`(resumed session ${id})\n`));
         break;
       }
+      case "title": {
+        // view or set manual session title
+        if (!store) {
+          process.stdout.write(p.dim("(session persistence is disabled)\n"));
+          break;
+        }
+        if (!sessionId) {
+          process.stdout.write(p.dim("(no session)\n"));
+          break;
+        }
+        if (!parsed.arg) {
+          const list = store.list();
+          const s = list.find((x) => x.id === sessionId);
+          const t = s ? s.title : undefined;
+          process.stdout.write(p.dim((t && t.length > 0 ? t : "(untitled)") + "\n"));
+          break;
+        }
+        store.setTitle(sessionId, parsed.arg);
+        process.stdout.write(p.dim("(title set)\n"));
+        break;
+      }
       default:
         process.stdout.write(p.dim(`unknown command: ${input} (try /help)\n`));
     }
@@ -432,4 +556,17 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
   await new Promise<void>((resolve) => rl.on("close", () => resolve()));
   cleanupTerminal();
   process.stdout.write(p.dim("\nbye\n"));
+
+  // On REPL close, attempt to prune checkpoints for the current session (best-effort)
+  try {
+    if (store && sessionId) {
+      try {
+        store.pruneCheckpoints(sessionId);
+      } catch {
+        // best-effort
+      }
+    }
+  } catch {
+    // swallow
+  }
 }

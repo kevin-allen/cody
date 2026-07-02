@@ -198,6 +198,24 @@ async function main(): Promise<void> {
     }
     const dbPath = config.sessions.path ?? join(process.cwd(), ".cody", "sessions.db");
     const s = openSessionStore(dbPath);
+    // if a prune subcommand is given, prune all sessions
+    if (argv[1] === "prune") {
+      let totalPruned = 0;
+      let sessionsCounted = 0;
+      for (const row of s.list()) {
+        try {
+          const n = s.pruneCheckpoints(row.id);
+          if (n > 0) totalPruned += n;
+          sessionsCounted += 1;
+        } catch {
+          // best-effort
+          sessionsCounted += 1;
+        }
+      }
+      s.close();
+      process.stdout.write(`pruned ${totalPruned} old checkpoints across ${sessionsCounted} sessions\n`);
+      return;
+    }
     process.stdout.write(formatSessionList(s.list(), makePalette(colorEnabled()), undefined));
     s.close();
     return;
