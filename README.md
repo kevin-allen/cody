@@ -69,6 +69,10 @@ defaults → `cody.config.json` in the working directory → environment variabl
       "allow": ["^git\\s+status", "^pnpm\\s+test"] // auto-approved (skips the ask)
     }
   },
+  "sessions": {
+    "enabled": true, // session persistence enabled by default; path is optional
+    "path": "sessions.sqlite" // optional: a project-local path for session state
+  },
   "limits": {
     "recursionLimit": 200 // max agent steps per turn (~2 per tool call);
                           // backstop against runaway loops, not a task budget
@@ -118,9 +122,11 @@ cody config              Print the resolved configuration.
 cody model [role]        Show the model a role resolves to.
 cody tools               List the tools and their permission policy.
 cody --help | --version
+cody --continue         Start or resume the most recent REPL session
+cody --resume <id>      Resume a specific session by id
 ```
 
-In the REPL: type a request; `/help`, `/clear`, `/exit` (or Ctrl-D). Ctrl-C
+In the REPL: type a request; `/help`, `/clear`, `/sessions`, `/exit` (or Ctrl-D). Ctrl-C
 cancels the current turn.
 
 ## Docker

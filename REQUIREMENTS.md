@@ -244,6 +244,9 @@ invasive.
   and meaningful exit codes, no prompts. This shares the code path with `auto`
   mode (§4.4) and is the intended entrypoint for scripts and the Docker image
   (§4.7).
+- FR-40 (persistent sessions): conversation state is stored in SQLite via the LangGraph checkpointer, behind the src/sessions.ts module; enabled by default, sessions.enabled=false restores the in-memory behavior.
+- FR-41 (--continue resumes the most recent session, --resume <id> a specific one; unknown id exits 1 listing known ids; headless cody run stays stateless).
+- FR-42 (/sessions lists sessions newest-first with id, updated time, token total, preview, current marked with *).
 
 ### 4.6 Configuration
 
@@ -275,6 +278,10 @@ invasive.
         "deny": ["rm\\s+-rf\\s+/", "git\\s+push", ":\\(\\)\\s*\\{"], // blocks in every mode
         "allow": ["^git\\s+status", "^pnpm\\s+test"] // optional: skips the ask prompt
       }
+    },
+    "sessions": {
+      "enabled": true,
+      "path": "sessions.sqlite"
     },
     "limits": {
       "recursionLimit": 200 // max agent super-steps per turn (~2 per tool round);
@@ -350,7 +357,7 @@ maintained in a separate document: [`VERIFICATION.md`](./VERIFICATION.md).
 ## 10. Roadmap (post-MVP, deferred)
 
 - Codebase indexing / semantic search (RAG).
-- Persistent cross-session memory.
+- Persistent cross-session memory (conversation persistence shipped: FR-40..42; only distilled memory remains on the roadmap).
 - Optional **standalone GUI** (a separate app — the "fancy" path). Explicitly
   **not** an in-terminal full-screen TUI: the terminal build stays cooperative
   and simple (see Differentiator & design principles).

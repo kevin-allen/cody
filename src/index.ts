@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import "dotenv/config";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { runCli } from "./cli.js";
 import { loadConfig, modelDefForRole } from "./config.js";
 import { getModel, assertToolCapable } from "./providers/factory.js";
@@ -9,6 +10,7 @@ import type { ApprovalRequest, ConfirmResult } from "./tools/index.js";
 import { createAgent, streamAgentText } from "./agent/graph.js";
 import { configureProxyFromEnv } from "./net/proxy.js";
 import { startRepl } from "./ui/repl.js";
+import { openSessionStore } from "./sessions.js";
 
 // Route hosted-provider HTTP through the standard proxy env vars when set
 // (honoring NO_PROXY, so local Ollama bypasses the proxy). Must run before any
@@ -121,7 +123,40 @@ async function main(): Promise<void> {
 
   // No recognized subcommand -> start the interactive REPL.
   const config = loadConfig({ cwd: process.cwd(), env: process.env, argv });
-  await startRepl({ cwd: process.cwd(), config, version: readVersion() });
+
+  // REPL-only flags: --continue (start/resume session) and --resume <id>
+  const replFlags = argv.slice();
+  const resumeIndex = replFlags.indexOf("--resume");
+  let resumeId: string | undefined;
+  if (resumeIndex >= 0 && replFlags.length > resumeIndex + 1) resumeId = replFlags[resumeIndex + 1];
+  const continueFlag = replFlags.includes("--continue");
+
+  let store: ReturnType<typeof openSessionStore> | undefined;
+  let resumeTarget: string | undefined;
+  if (config.sessions.enabled) {
+    const dbPath = config.sessions.path ?? join(process.cwd(), ".cody", "sessions.db");
+    store = openSessionStore(dbPath);
+    if (resumeId) {
+      if (!store.has(resumeId)) {
+        const ids = store.list().map((s) => s.id).join("\n");
+        process.stderr.write(`unknown session id: ${resumeId}\nknown ids:\n${ids}\n`);
+        process.exitCode = 1;
+        return;
+      }
+      resumeTarget = resumeId;
+    } else if (continueFlag) {
+      // start/resume: resume the most recent session when one exists,
+      // otherwise start a new one (leave resumeTarget undefined)
+      const latest = store.list()[0]?.id ?? store.latest();
+      // prefer latest() but fall back to list ordering in case
+      resumeTarget = latest ? latest : undefined;
+    }
+  }
+
+  const replPromise = startRepl({ cwd: process.cwd(), config, version: readVersion(), store, resumeTarget });
+  await replPromise.finally(() => {
+    if (store) store.close();
+  });
 }
 
 main().catch((err: unknown) => {

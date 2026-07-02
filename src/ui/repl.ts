@@ -13,6 +13,7 @@ import { createTools } from "../tools/index.js";
 import type { ApprovalRequest, ConfirmResult } from "../tools/index.js";
 import { createAgent, streamAgentEvents, repairDanglingToolCalls } from "../agent/graph.js";
 import type { UsageTotals } from "../agent/graph.js";
+import type { SessionStore } from "../sessions.js";
 import {
   makePalette,
   colorEnabled,
@@ -29,7 +30,7 @@ import {
   DISABLE_BRACKETED_PASTE,
 } from "./paste.js";
 
-export type SlashCommand = "exit" | "clear" | "help" | "usage" | "unknown";
+export type SlashCommand = "exit" | "clear" | "help" | "usage" | "sessions" | "unknown";
 
 /** Parse a slash command (pure — for testing). */
 export function parseSlash(input: string): SlashCommand {
@@ -38,6 +39,7 @@ export function parseSlash(input: string): SlashCommand {
   if (cmd === "clear") return "clear";
   if (cmd === "help") return "help";
   if (cmd === "usage") return "usage";
+  if (cmd === "sessions") return "sessions";
   return "unknown";
 }
 
@@ -51,6 +53,7 @@ function helpText(p: Palette): string {
     `${p.bold("/help")}   show this help`,
     `${p.bold("/clear")}  start a fresh conversation`,
     `${p.bold("/usage")}  print token usage totals for this session`,
+    `${p.bold("/sessions")} list known sessions (if enabled)`,
     `${p.bold("/exit")}   quit (or Ctrl-D; plain "exit"/"quit" won't)`,
     "",
   ]
@@ -62,6 +65,8 @@ export interface ReplDeps {
   readonly cwd: string;
   readonly config: Config;
   readonly version: string;
+  readonly store?: SessionStore;
+  readonly resumeTarget?: string;
 }
 
 /** Start the interactive REPL (FR-24..FR-27, FR-34..FR-37). */
@@ -157,9 +162,33 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     },
     confirm,
   });
-  const agent = createAgent({ model, tools, checkpointer: new MemorySaver() });
 
-  let threadId = "repl-0";
+  const store = deps.store;
+  const saver = store ? store.saver : new MemorySaver();
+
+  const agent = createAgent({ model, tools, checkpointer: saver });
+
+  let sessionId: string | undefined;
+  // undefined = sessions not used; null = awaiting first input; string = already set to first input consumed? We'll store first input value separately.
+  let sessionFirstInputValue: string | null | undefined = undefined;
+  if (store) {
+    // resumeTarget takes precedence when provided
+    sessionId = deps.resumeTarget ?? store.newSessionId();
+    // register only when we created a new id (i.e., no resume target)
+    if (!deps.resumeTarget) store.register(sessionId);
+    // await repair of dangling calls if resuming
+    if (deps.resumeTarget) {
+      try {
+        await repairDanglingToolCalls(agent, sessionId);
+      } catch {
+        // best-effort
+      }
+    }
+    // mark that we are awaiting the first input value
+    sessionFirstInputValue = null;
+  }
+
+  let threadId = sessionId ? sessionId : "repl-0";
   let clears = 0;
   let busy = false;
   let currentAbort: AbortController | null = null;
@@ -171,8 +200,9 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
   let sessionOutputTokens = 0;
 
   const def = modelDefForRole(deps.config, "agent");
+  const sessionLine = sessionId ? `${p.dim(`session: ${sessionId}`)}\n` : "";
   process.stdout.write(
-    banner(p, deps.version, deps.config.permissions.mode, `${def.provider}:${def.model}`, deps.cwd),
+    banner(p, deps.version, deps.config.permissions.mode, `${def.provider}:${def.model}`, deps.cwd) + sessionLine,
   );
 
   rl.on("SIGINT", () => {
@@ -186,6 +216,11 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
   });
 
   async function runTurn(input: string): Promise<void> {
+    // capture first input value for session if applicable
+    if (store && sessionFirstInputValue === null) {
+      sessionFirstInputValue = input;
+    }
+
     busy = true;
     currentAbort = new AbortController();
     try {
@@ -199,6 +234,17 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
           sessionInputTokens += usage.inputTokens;
           sessionOutputTokens += usage.outputTokens;
           turnUsage = usage;
+          // touch the store if present; pass the first input once, then null
+          if (store && sessionId) {
+            const toPass = sessionFirstInputValue === undefined ? null : sessionFirstInputValue;
+            try {
+              store.touch(sessionId, toPass, { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens });
+            } catch {
+              // best-effort
+            }
+            // after first touch, ensure we pass null next time
+            sessionFirstInputValue = undefined;
+          }
         },
       })) {
         if (event.kind === "text") {
@@ -249,8 +295,18 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
         process.stdout.write(helpText(p));
         break;
       case "clear":
-        threadId = `repl-${(clears += 1)}`;
-        process.stdout.write(p.dim("(conversation cleared)\n"));
+        if (store) {
+          // start a fresh registered session id
+          const newId = store.newSessionId();
+          store.register(newId);
+          threadId = newId;
+          sessionId = newId;
+          sessionFirstInputValue = null;
+          process.stdout.write(p.dim("(conversation cleared, new session started)\n"));
+        } else {
+          threadId = `repl-${(clears += 1)}`;
+          process.stdout.write(p.dim("(conversation cleared)\n"));
+        }
         break;
       case "usage": {
         const sessionTotal = sessionInputTokens + sessionOutputTokens;
@@ -259,6 +315,19 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
             `(tokens: ${sessionInputTokens} in / ${sessionOutputTokens} out - session: ${sessionTotal} total)\n`,
           ),
         );
+        break;
+      }
+      case "sessions": {
+        if (!store) {
+          process.stdout.write(p.dim("(session persistence is disabled)\n"));
+          break;
+        }
+        const list = store.list();
+        for (const s of list) {
+          const mark = sessionId && s.id === sessionId ? "*" : " ";
+          const total = s.inputTokens + s.outputTokens;
+          process.stdout.write(`${mark} ${s.id}  ${s.updatedAt}  ${total}  ${s.preview}\n`);
+        }
         break;
       }
       default:

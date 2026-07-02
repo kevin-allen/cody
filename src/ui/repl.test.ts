@@ -14,6 +14,10 @@ describe("parseSlash", () => {
     expect(parseSlash("/usage")).toBe("usage");
     expect(parseSlash("  /UsAge  ")).toBe("usage");
   });
+  it("recognizes /sessions", () => {
+    expect(parseSlash("/sessions")).toBe("sessions");
+    expect(parseSlash(" /SeSsIoNs  ")).toBe("sessions");
+  });
   it("returns unknown for anything else", () => {
     expect(parseSlash("/frobnicate")).toBe("unknown");
     expect(parseSlash("/")).toBe("unknown");
