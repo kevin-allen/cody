@@ -213,3 +213,59 @@ export async function* streamAgentText(
     if (event.kind === "text") yield event.text;
   }
 }
+
+/**
+ * Compact a thread into a new thread by summarizing its messages using the
+ * provided summarizer. Returns the number of messages compacted and the
+ * produced summary.
+ */
+export async function compactThread(
+  agent: Agent,
+  summarizer: BaseChatModel,
+  fromThreadId: string,
+  toThreadId: string,
+): Promise<{ messageCount: number; summary: string }> {
+  const config = { configurable: { thread_id: fromThreadId } };
+  const state = await agent.getState(config);
+  const messages = (state.values as { messages?: BaseMessage[] }).messages ?? [];
+
+  // Serialize messages one line per message: role plus text content. Tool
+  // results are truncated to 400 chars.
+  const lines: string[] = [];
+  for (const m of messages) {
+    const role = typeof m._getType === "function" ? m._getType() : "unknown";
+    const contentRaw = (m as { content?: unknown }).content;
+    let contentStr = "";
+    if (typeof contentRaw === "string") contentStr = contentRaw;
+    else if (contentRaw !== undefined) {
+      try {
+        contentStr = JSON.stringify(contentRaw);
+      } catch {
+        contentStr = String(contentRaw);
+      }
+    }
+    if (role === "tool") {
+      if (contentStr.length > 400) contentStr = contentStr.slice(0, 400 - 1) + "…";
+    }
+    // Collapse newlines to single spaces so each message is one line.
+    contentStr = contentStr.replace(/\s+/g, " ").trim();
+    lines.push(`${role}: ${contentStr}`);
+  }
+
+  const serialized = lines.join("\n");
+  const prompt =
+    "Summarize this coding-assistant conversation faithfully so work can continue seamlessly in a fresh thread. Preserve: key facts and decisions, file paths and code identifiers, what has been done, current state, and open tasks. Be concise but lose nothing load-bearing.\n\n" +
+    serialized;
+
+  // Invoke the summarizer with a single HumanMessage. Call invoke as a
+  // method on the summarizer (do not detach).
+  const res = await summarizer.invoke([new HumanMessage(prompt)]);
+  const content = (res as { content?: unknown }).content;
+  if (typeof content !== "string") throw new Error("summarizer returned non-string content");
+  const summary = content;
+
+  // Seed the new thread with the summary as a HumanMessage.
+  await agent.updateState({ configurable: { thread_id: toThreadId } }, { messages: [new HumanMessage("[Summary of the previous conversation]\n" + summary)] });
+
+  return { messageCount: messages.length, summary };
+}

@@ -16,7 +16,7 @@ import { getModel, assertToolCapable } from "../providers/factory.js";
 import { createTools, createGatedMcpTools } from "../tools/index.js";
 import type { ApprovalRequest, ConfirmResult } from "../tools/index.js";
 import type { StructuredToolInterface } from "@langchain/core/tools";
-import { createAgent, streamAgentEvents, repairDanglingToolCalls } from "../agent/graph.js";
+import { createAgent, streamAgentEvents, repairDanglingToolCalls, compactThread } from "../agent/graph.js";
 import type { UsageTotals } from "../agent/graph.js";
 import type { SessionStore } from "../sessions.js";
 import { resolveSessionRef } from "../sessions.js";
@@ -37,7 +37,7 @@ import {
   DISABLE_BRACKETED_PASTE,
 } from "./paste.js";
 
-export type SlashCommand = "exit" | "clear" | "help" | "usage" | "sessions" | "resume" | "title" | "unknown";
+export type SlashCommand = "exit" | "clear" | "help" | "usage" | "sessions" | "resume" | "title" | "compact" | "unknown";
 
 /** Parse a slash command (pure — for testing). */
 export function parseSlash(input: string): { cmd: SlashCommand; arg?: string } {
@@ -75,6 +75,7 @@ export function parseSlash(input: string): { cmd: SlashCommand; arg?: string } {
   if (cmd === "sessions") return { cmd: "sessions", arg };
   if (cmd === "resume") return { cmd: "resume", arg };
   if (cmd === "title") return { cmd: "title", arg };
+  if (cmd === "compact") return { cmd: "compact", arg };
   return { cmd: "unknown", arg };
 }
 
@@ -91,6 +92,7 @@ function helpText(p: Palette): string {
     `${p.bold("/sessions")} list known sessions (if enabled)`,
     `${p.bold("/resume")}   resume a previous session`,
     `${p.bold("/title")}   view or set a manual session title`,
+    `${p.bold("/compact")}  compact the current session into a fresh one`,
     `${p.bold("/exit")}   quit (or Ctrl-D; plain "exit"/"quit" won't)`,
     "",
   ]
@@ -529,6 +531,28 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
         }
         store.setTitle(sessionId, parsed.arg);
         process.stdout.write(p.dim("(title set)\n"));
+        break;
+      }
+      case "compact": {
+        process.stdout.write(p.dim("(compacting...)\n"));
+        try {
+          const summarizer = getModel(deps.config, "compact");
+          const newId = store ? store.newSessionId() : `repl-compact-${(clears += 1)}`;
+          const { messageCount, summary } = await compactThread(agent, summarizer, threadId, newId);
+          if (store) {
+            store.register(newId);
+            store.touch(newId, summary.slice(0, 80), { inputTokens: 0, outputTokens: 0 });
+          }
+          sessionId = store ? newId : sessionId;
+          threadId = newId;
+          process.stdout.write(
+            p.dim(`(compacted ${messageCount} messages into a new session ${newId})\n`),
+          );
+        } catch (err) {
+          process.stdout.write(
+            `${p.red("compaction failed:")} ${(err as Error).message} — staying on the current session\n`,
+          );
+        }
         break;
       }
       default:

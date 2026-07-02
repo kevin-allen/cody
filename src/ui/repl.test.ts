@@ -62,3 +62,11 @@ describe("parseSlash with args (title)", () => {
     expect(p.arg).toBe("My Title with  spaces");
   });
 });
+
+describe("parseSlash compact", () => {
+  it("parses /compact", () => {
+    const p = parseSlash("/compact");
+    expect(p.cmd).toBe("compact");
+    expect(p.arg).toBeUndefined();
+  });
+});
