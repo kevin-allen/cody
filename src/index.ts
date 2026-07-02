@@ -8,8 +8,10 @@ import { getModel, assertToolCapable } from "./providers/factory.js";
 import { TOOL_INFO, resolvePolicy, createTools } from "./tools/index.js";
 import type { ApprovalRequest, ConfirmResult } from "./tools/index.js";
 import { createAgent, streamAgentText } from "./agent/graph.js";
-import { configureProxyFromEnv } from "./net/proxy.js";
+import { configureProxyFromEnv, relaxTlsVerification } from "./net/proxy.js";
 import { startRepl } from "./ui/repl.js";
+import { connectMcpServers } from "./tools/mcp.js";
+import { createGatedMcpTools } from "./tools/index.js";
 import { openSessionStore, resolveSessionRef } from "./sessions.js";
 import { makePalette, colorEnabled, formatSessionList } from "./ui/render.js";
 
@@ -79,13 +81,38 @@ async function main(): Promise<void> {
           "allowlisted tools can provide, or tell the user to re-run with --auto",
       });
     };
-    const tools = createTools({ workdir: process.cwd(), config, confirm });
-    const agent = createAgent({ model, tools });
-    for await (const chunk of streamAgentText(agent, task, {
-      recursionLimit: config.limits.recursionLimit,
-    }))
-      process.stdout.write(chunk);
-    process.stdout.write("\n");
+
+    // Attempt MCP connection for run mode as well (wrap tools with gating)
+    try {
+      if (Object.values(config.mcp.servers ?? {}).some((s) => s?.insecureTls)) {
+        relaxTlsVerification();
+      }
+    } catch {
+      /* ignore */
+    }
+    let mcpForRun: { rawTools: import("@langchain/core/tools").StructuredToolInterface[]; close: () => Promise<void> } | undefined;
+    try {
+      mcpForRun = await connectMcpServers(config);
+    } catch (err) {
+      process.stderr.write(`warning: failed to connect to MCP servers: ${(err as Error).message}\n`);
+    }
+
+    const baseCtx = { workdir: process.cwd(), config, confirm } as unknown as import("./tools/index.js").ToolContext;
+    const tools = [
+      ...createTools(baseCtx),
+      ...(mcpForRun ? createGatedMcpTools(baseCtx, mcpForRun.rawTools) : []),
+    ];
+
+    try {
+      const agent = createAgent({ model, tools });
+      for await (const chunk of streamAgentText(agent, task, {
+        recursionLimit: config.limits.recursionLimit,
+      }))
+        process.stdout.write(chunk);
+      process.stdout.write("\n");
+    } finally {
+      if (mcpForRun) await mcpForRun.close();
+    }
     return;
   }
 
@@ -109,6 +136,24 @@ async function main(): Promise<void> {
     process.stdout.write(
       `\nshell denylist (applies in every mode): ${config.permissions.shell.deny.join(", ")}\n`,
     );
+    if (Object.keys(config.mcp.servers).length > 0) {
+      if (Object.values(config.mcp.servers).some((s) => s.insecureTls)) relaxTlsVerification();
+      try {
+        const mcp = await connectMcpServers(config);
+        if (mcp) {
+          const policy = resolvePolicy(config.permissions, "mcp");
+          process.stdout.write(`\nMCP tools:\n`);
+          for (const t of mcp.rawTools) {
+            process.stdout.write(
+              `  ${t.name.padEnd(28)} mcp    ${policy.padEnd(6)} ${(t.description ?? "").slice(0, 60)}\n`,
+            );
+          }
+          await mcp.close();
+        }
+      } catch (err) {
+        process.stderr.write(`warning: MCP server connection failed: ${(err as Error).message}\n`);
+      }
+    }
     return;
   }
 
@@ -221,9 +266,28 @@ async function main(): Promise<void> {
     return;
   }
 
-  const replPromise = startRepl({ cwd: process.cwd(), config, version: readVersion(), store, resumeTarget });
-  await replPromise.finally(() => {
+  // Attempt to connect to MCP servers (if any). If any server requests insecureTls,
+  // relax TLS verification for the process.
+  try {
+    if (Object.values(config.mcp.servers ?? {}).some((s) => s?.insecureTls)) {
+      relaxTlsVerification();
+    }
+  } catch {
+    // ignore
+  }
+
+  let mcp: { rawTools: import("@langchain/core/tools").StructuredToolInterface[]; close: () => Promise<void> } | undefined;
+  try {
+    mcp = await connectMcpServers(config);
+  } catch (err) {
+    process.stderr.write(`warning: failed to connect to MCP servers: ${(err as Error).message}\n`);
+  }
+
+  // No recognized subcommand -> start the interactive REPL.
+  const replPromise = startRepl({ cwd: process.cwd(), config, version: readVersion(), store, resumeTarget, rawMcpTools: mcp?.rawTools });
+  await replPromise.finally(async () => {
     if (store) store.close();
+    if (mcp) await mcp.close();
   });
 }
 

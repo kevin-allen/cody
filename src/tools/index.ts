@@ -13,7 +13,8 @@ import {
 } from "./fs.js";
 import { runShell } from "./shell.js";
 
-export { resolvePolicy, isShellDenied, isShellAllowed } from "./permissions.js";
+export { resolvePolicy, isShellDenied, isShellAllowed, isMcpAllowed, isMcpDenied } from "./permissions.js";
+export { createGatedMcpTools } from "./mcp.js";
 
 export interface ApprovalRequest {
   readonly action: ToolAction;
@@ -22,6 +23,8 @@ export interface ApprovalRequest {
   readonly preview: string;
   /** Pre-approved (e.g. by the shell allowlist): skips the `ask` prompt, never overrides `deny`. */
   readonly preapproved?: boolean;
+  /** Optional subject, used by UI for always-allow; here it's the tool name for MCP tools. */
+  readonly subject?: string;
 }
 
 /** Outcome of an approval prompt: approved, or denied with an optional reason. */

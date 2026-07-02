@@ -13,13 +13,21 @@ export interface ModelDef {
 }
 
 export type PermissionMode = "supervised" | "auto" | "readonly";
-export type ToolAction = "read" | "write" | "edit" | "shell";
+export type ToolAction = "read" | "write" | "edit" | "shell" | "mcp";
 export type ActionPolicy = "allow" | "ask" | "deny";
+
+export interface McpServerConfig {
+  readonly url: string;
+  readonly headers?: Record<string, string>;
+  readonly insecureTls?: boolean;
+  readonly tools?: string[];
+}
 
 export interface PermissionsConfig {
   readonly mode: PermissionMode;
   readonly overrides: Partial<Record<ToolAction, ActionPolicy>>;
   readonly shell: { readonly deny: readonly string[]; readonly allow: readonly string[] };
+  readonly mcp: { readonly deny: readonly string[]; readonly allow: readonly string[] };
 }
 
 export interface LimitsConfig {
@@ -44,6 +52,7 @@ export interface Config {
   readonly permissions: PermissionsConfig;
   readonly limits: LimitsConfig;
   readonly sessions: SessionsConfig;
+  readonly mcp: { readonly servers: Record<string, McpServerConfig> };
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -55,9 +64,11 @@ export const DEFAULT_CONFIG: Config = {
     mode: "supervised",
     overrides: {},
     shell: { deny: ["rm\\s+-rf\\s+/", "git\\s+push", ":\\(\\)\\s*\\{"], allow: [] },
+    mcp: { deny: [], allow: [] },
   },
   limits: { recursionLimit: 200 },
   sessions: { enabled: true },
+  mcp: { servers: {} },
 };
 
 const PERMISSION_MODES: readonly PermissionMode[] = ["supervised", "auto", "readonly"];
@@ -104,6 +115,10 @@ export function resolveConfig(inputs: ResolveInputs = {}): Config {
       deny: filePerms.shell?.deny ?? DEFAULT_CONFIG.permissions.shell.deny,
       allow: filePerms.shell?.allow ?? DEFAULT_CONFIG.permissions.shell.allow,
     },
+    mcp: {
+      deny: filePerms.mcp?.deny ?? DEFAULT_CONFIG.permissions.mcp.deny,
+      allow: filePerms.mcp?.allow ?? DEFAULT_CONFIG.permissions.mcp.allow,
+    },
   };
 
   const fileLimit = fileConfig.limits?.recursionLimit;
@@ -120,6 +135,14 @@ export function resolveConfig(inputs: ResolveInputs = {}): Config {
     path: typeof fileSessions.path === "string" && fileSessions.path.length > 0 ? fileSessions.path : undefined,
   } as SessionsConfig;
 
+  // --- MCP servers merge ---
+  const mcpServers: Record<string, McpServerConfig> = { ...DEFAULT_CONFIG.mcp.servers };
+  for (const [name, def] of Object.entries(fileConfig.mcp?.servers ?? {})) {
+    if (!def) continue;
+    // shallow merge; preserve existing keys if present
+    mcpServers[name] = { ...mcpServers[name], ...(def as McpServerConfig) };
+  }
+
   // --- environment overrides ---
   const ollamaBaseUrl = env.OLLAMA_BASE_URL;
   if (ollamaBaseUrl) {
@@ -133,12 +156,27 @@ export function resolveConfig(inputs: ResolveInputs = {}): Config {
   const envMode = coerceMode(env.CODY_MODE);
   if (envMode) permissions = { ...permissions, mode: envMode };
 
+  // Substitute ${VAR} in MCP header values with env[VAR] ?? ""
+  for (const name of Object.keys(mcpServers)) {
+    const server = mcpServers[name];
+    if (!server || !server.headers) continue;
+    const newHeaders: Record<string, string> = {};
+    for (const [k, v] of Object.entries(server.headers)) {
+      if (typeof v !== "string") {
+        newHeaders[k] = String(v);
+        continue;
+      }
+      newHeaders[k] = v.replace(/\${([^}]+)}/g, (_m, varName: string) => env[varName] ?? "");
+    }
+    mcpServers[name] = { ...server, headers: newHeaders };
+  }
+
   // --- CLI flag overrides (highest precedence) ---
   const flags = parseFlags(argv);
   if (flags.model) roles.agent = flags.model;
   if (flags.mode) permissions = { ...permissions, mode: flags.mode };
 
-  return { models, roles, permissions, limits, sessions };
+  return { models, roles, permissions, limits, sessions, mcp: { servers: mcpServers } };
 }
 
 interface Flags {
@@ -240,6 +278,19 @@ export function withShellAllowPattern(config: Config, pattern: string): Config {
   };
 }
 
+/** A copy of the config with the pattern appended to the mcp allowlist (no duplicates). */
+export function withMcpAllowPattern(config: Config, pattern: string): Config {
+  const { allow } = config.permissions.mcp;
+  if (allow.includes(pattern)) return config;
+  return {
+    ...config,
+    permissions: {
+      ...config.permissions,
+      mcp: { ...config.permissions.mcp, allow: [...allow, pattern] },
+    },
+  };
+}
+
 /**
  * Append a pattern to `permissions.shell.allow` in cody.config.json (FR-22b),
  * creating the file if absent and preserving everything else in it. Throws
@@ -262,6 +313,32 @@ export function saveShellAllowPattern(cwd: string, pattern: string): void {
   const permissions = (raw.permissions ??= {}) as Record<string, unknown>;
   const shell = (permissions.shell ??= {}) as Record<string, unknown>;
   const allow: unknown[] = Array.isArray(shell.allow) ? shell.allow : (shell.allow = []);
+  if (!allow.includes(pattern)) allow.push(pattern);
+  writeFileSync(path, `${JSON.stringify(raw, null, 2)}\n`);
+}
+
+/**
+ * Append a pattern to `permissions.mcp.allow` in cody.config.json, creating the
+ * file if absent and preserving everything else in it. Throws ConfigError on
+ * unparseable JSON rather than clobbering the file.
+ */
+export function saveMcpAllowPattern(cwd: string, pattern: string): void {
+  const path = resolve(cwd, CONFIG_FILENAME);
+  let text: string | undefined;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    text = undefined; // no config file yet -> start one
+  }
+  let raw: Record<string, unknown>;
+  try {
+    raw = text === undefined ? {} : (JSON.parse(text) as Record<string, unknown>);
+  } catch (err) {
+    throw new ConfigError(`Failed to parse ${CONFIG_FILENAME}: ${(err as Error).message}`);
+  }
+  const permissions = (raw.permissions ??= {}) as Record<string, unknown>;
+  const mcp = (permissions.mcp ??= {}) as Record<string, unknown>;
+  const allow: unknown[] = Array.isArray(mcp.allow) ? mcp.allow : (mcp.allow = []);
   if (!allow.includes(pattern)) allow.push(pattern);
   writeFileSync(path, `${JSON.stringify(raw, null, 2)}\n`);
 }

@@ -9,10 +9,13 @@ import {
   commandToAllowPattern,
   withShellAllowPattern,
   saveShellAllowPattern,
+  withMcpAllowPattern,
+  saveMcpAllowPattern,
 } from "../config.js";
 import { getModel, assertToolCapable } from "../providers/factory.js";
-import { createTools } from "../tools/index.js";
+import { createTools, createGatedMcpTools } from "../tools/index.js";
 import type { ApprovalRequest, ConfirmResult } from "../tools/index.js";
+import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createAgent, streamAgentEvents, repairDanglingToolCalls } from "../agent/graph.js";
 import type { UsageTotals } from "../agent/graph.js";
 import type { SessionStore } from "../sessions.js";
@@ -101,6 +104,7 @@ export interface ReplDeps {
   readonly version: string;
   readonly store?: SessionStore;
   readonly resumeTarget?: string;
+  readonly rawMcpTools?: StructuredToolInterface[];
 }
 
 /** Start the interactive REPL (FR-24..FR-27, FR-34..FR-37). */
@@ -165,16 +169,36 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
 
   const confirm = async (req: ApprovalRequest): Promise<ConfirmResult> => {
     process.stdout.write(formatApproval(req, p));
-    if (req.action !== "shell") {
+    // For shell and MCP actions, offer the 'always' option; for others, plain y/N.
+    if (req.action !== "shell" && req.action !== "mcp") {
       const answer = await askLine(`${p.bold("Apply?")} [y/N] `);
       return isAffirmative(answer) ? { approved: true } : deny();
     }
+
     const answer = await askLine(
-      `${p.bold("Apply?")} [y/N/a] ${p.dim("(a = yes, and always allow this command)")} `,
+      `${p.bold("Apply?")} [y/N/a] ${p.dim("(a = yes, and always allow this command) ")}`,
     );
     const parsed = parseApprovalAnswer(answer);
     if (parsed === "no") return deny();
     if (parsed !== "always") return { approved: true };
+
+    // 'always' selected: if MCP tool and subject present, add to MCP allowlist.
+    if (req.action === "mcp" && req.subject) {
+      const pattern = commandToAllowPattern(req.subject);
+      liveConfig = withMcpAllowPattern(liveConfig, pattern);
+      try {
+        saveMcpAllowPattern(deps.cwd, pattern);
+        process.stdout.write(p.dim(`(mcp tool allowlisted in cody.config.json: ${pattern})\n`));
+      } catch (err) {
+        process.stdout.write(
+          `${p.yellow("warning:")} could not update cody.config.json ` +
+            `(${(err as Error).message}) — allowed for this session only\n`,
+        );
+      }
+      return { approved: true };
+    }
+
+    // Fallback: shell allowlist behavior
     const pattern = commandToAllowPattern(req.preview);
     liveConfig = withShellAllowPattern(liveConfig, pattern);
     try {
@@ -189,13 +213,18 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     return { approved: true };
   };
 
-  const tools = createTools({
+  const ctx = {
     workdir: deps.cwd,
     get config() {
       return liveConfig;
     },
     confirm,
-  });
+  };
+
+  const tools = [
+    ...createTools(ctx),
+    ...(deps.rawMcpTools ? createGatedMcpTools(ctx as unknown as import("../tools/index.js").ToolContext, deps.rawMcpTools) : []),
+  ];
 
   const store = deps.store;
   const saver = store ? store.saver : new MemorySaver();

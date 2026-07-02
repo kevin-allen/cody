@@ -40,3 +40,20 @@ export function configureProxyFromEnv(env: NodeJS.ProcessEnv = process.env): boo
   }
   return true;
 }
+
+/**
+ * Replace the global dispatcher with one that relaxes TLS certificate
+ * verification for outbound requests. This is intentionally process-global
+ * and should only be called when the user explicitly asked to allow
+ * insecure TLS (e.g. via config). Writes a one-line warning to stderr.
+ */
+export function relaxTlsVerification(): void {
+  // Create an EnvHttpProxyAgent that disables TLS verification for requests
+  // and for CONNECT/TLS.
+  // EnvHttpProxyAgent's TS options may not expose the nested TLS options in this
+  // version, so cast through unknown to set them as requested by the feature spec.
+  const agent = new EnvHttpProxyAgent({ requestTls: { rejectUnauthorized: false }, connect: { rejectUnauthorized: false } } as unknown as Record<string, unknown>);
+  setGlobalDispatcher(agent as unknown as import("undici").Agent);
+  // One-line warning to stderr
+  process.stderr.write("Warning: TLS verification is disabled for this process.\n");
+}

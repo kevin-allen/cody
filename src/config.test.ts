@@ -10,6 +10,8 @@ import {
   commandToAllowPattern,
   withShellAllowPattern,
   saveShellAllowPattern,
+  withMcpAllowPattern,
+  saveMcpAllowPattern,
 } from "./config.js";
 
 describe("resolveConfig", () => {
@@ -98,6 +100,7 @@ describe("modelDefForRole", () => {
       permissions: DEFAULT_CONFIG.permissions,
       limits: DEFAULT_CONFIG.limits,
       sessions: DEFAULT_CONFIG.sessions,
+      mcp: { servers: {} },
     };
     expect(() => modelDefForRole(c, "agent")).toThrow(/not in the catalog/);
   });
@@ -144,6 +147,50 @@ describe("sessions configuration", () => {
     const c = resolveConfig({ fileConfig: { sessions: { enabled: "yes" as unknown as boolean, path: "" } } });
     expect(c.sessions.enabled).toBe(DEFAULT_CONFIG.sessions.enabled);
     expect(c.sessions.path).toBeUndefined();
+  });
+});
+
+describe("mcp configuration", () => {
+  it("merges file servers over defaults", () => {
+    const c = resolveConfig({ fileConfig: { mcp: { servers: { a: { url: "https://x" } } } } });
+    expect(c.mcp.servers).toHaveProperty("a");
+    expect(Object.keys(c.mcp.servers).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("substitutes env vars in header values, empty when missing", () => {
+    const fileCfg = { mcp: { servers: { s: { url: "https://x", headers: { Authorization: "Bearer ${MY_TOKEN}" } } } } };
+    const c1 = resolveConfig({ fileConfig: fileCfg, env: { MY_TOKEN: "abc" } });
+    expect(c1.mcp.servers.s?.headers?.Authorization).toBe("Bearer abc");
+    const c2 = resolveConfig({ fileConfig: fileCfg, env: {} });
+    expect(c2.mcp.servers.s?.headers?.Authorization).toBe("Bearer ");
+  });
+
+  it("withMcpAllowPattern appends without mutating, and dedupes", () => {
+    const base = resolveConfig();
+    const c1 = withMcpAllowPattern(base, "^tool$");
+    expect(c1.permissions.mcp.allow).toEqual(["^tool$"]);
+    expect(base.permissions.mcp.allow).toEqual([]);
+    expect(withMcpAllowPattern(c1, "^tool$")).toBe(c1);
+  });
+
+  it("saveMcpAllowPattern creates and appends in cody.config.json", () => {
+    const wd = mkdtempSync(join(tmpdir(), "cody-cfg-"));
+    try {
+      saveMcpAllowPattern(wd, "^tool$");
+      saveMcpAllowPattern(wd, "^tool$");
+      const raw = JSON.parse(readFileSync(join(wd, "cody.config.json"), "utf8"));
+      expect(raw.permissions.mcp.allow).toEqual(["^tool$"]);
+
+      // preserves other fields
+      const path = join(wd, "cody.config.json");
+      writeFileSync(path, JSON.stringify({ models: { default: { provider: "ollama", model: "qwen3" } }, permissions: { mode: "supervised", mcp: { deny: ["x"], allow: ["^ls$"] }, shell: { deny: [], allow: [] } } }));
+      saveMcpAllowPattern(wd, "^echo hi$");
+      const raw2 = JSON.parse(readFileSync(path, "utf8"));
+      expect(raw2.permissions.mcp.allow).toEqual(["^ls$", "^echo hi$"]); 
+      expect(raw2.models.default.model).toBe("qwen3");
+    } finally {
+      rmSync(wd, { recursive: true, force: true });
+    }
   });
 });
 

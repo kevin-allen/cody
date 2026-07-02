@@ -2,9 +2,9 @@ import type { PermissionsConfig, PermissionMode, ToolAction, ActionPolicy } from
 
 /** Per-action policy for each mode preset (FR-19). */
 const PRESETS: Record<PermissionMode, Record<ToolAction, ActionPolicy>> = {
-  supervised: { read: "allow", write: "ask", edit: "ask", shell: "ask" },
-  auto: { read: "allow", write: "allow", edit: "allow", shell: "allow" },
-  readonly: { read: "allow", write: "deny", edit: "deny", shell: "deny" },
+  supervised: { read: "allow", write: "ask", edit: "ask", shell: "ask", mcp: "ask" },
+  auto: { read: "allow", write: "allow", edit: "allow", shell: "allow", mcp: "allow" },
+  readonly: { read: "allow", write: "deny", edit: "deny", shell: "deny", mcp: "deny" },
 };
 
 /** Resolve the effective policy for an action: preset, then per-action override. */
@@ -38,4 +38,16 @@ export function isShellDenied(permissions: PermissionsConfig, command: string): 
  */
 export function isShellAllowed(permissions: PermissionsConfig, command: string): boolean {
   return matchesAny(permissions.shell.allow, command);
+}
+
+/** Whether an MCP action matches the denylist. Denylist wins in every mode. */
+export function isMcpDenied(permissions: PermissionsConfig, toolName: string): boolean {
+  const unpref = toolName.includes("__") ? toolName.split("__").slice(1).join("__") : toolName;
+  return matchesAny(permissions.mcp.deny, toolName) || matchesAny(permissions.mcp.deny, unpref);
+}
+
+/** Whether an MCP action matches the allowlist. Allowlist doesn't override deny. */
+export function isMcpAllowed(permissions: PermissionsConfig, toolName: string): boolean {
+  const unpref = toolName.includes("__") ? toolName.split("__").slice(1).join("__") : toolName;
+  return matchesAny(permissions.mcp.allow, toolName) || matchesAny(permissions.mcp.allow, unpref);
 }

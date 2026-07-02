@@ -1,12 +1,13 @@
 import { describe, it, expect } from "vitest";
 import type { PermissionsConfig } from "../config.js";
-import { resolvePolicy, isShellDenied, isShellAllowed } from "./permissions.js";
+import { resolvePolicy, isShellDenied, isShellAllowed, isMcpAllowed, isMcpDenied } from "./permissions.js";
 
 function perms(over: Partial<PermissionsConfig> = {}): PermissionsConfig {
   return {
     mode: "supervised",
     overrides: {},
     shell: { deny: ["rm\\s+-rf\\s+/", "git\\s+push"], allow: [] },
+    mcp: { deny: [], allow: [] },
     ...over,
   };
 }
@@ -18,11 +19,12 @@ describe("resolvePolicy", () => {
     expect(resolvePolicy(p, "write")).toBe("ask");
     expect(resolvePolicy(p, "edit")).toBe("ask");
     expect(resolvePolicy(p, "shell")).toBe("ask");
+    expect(resolvePolicy(p, "mcp")).toBe("ask");
   });
 
   it("auto: everything allowed", () => {
     const p = perms({ mode: "auto" });
-    for (const a of ["read", "write", "edit", "shell"] as const) {
+    for (const a of ["read", "write", "edit", "shell", "mcp"] as const) {
       expect(resolvePolicy(p, a)).toBe("allow");
     }
   });
@@ -32,6 +34,7 @@ describe("resolvePolicy", () => {
     expect(resolvePolicy(p, "read")).toBe("allow");
     expect(resolvePolicy(p, "write")).toBe("deny");
     expect(resolvePolicy(p, "shell")).toBe("deny");
+    expect(resolvePolicy(p, "mcp")).toBe("deny");
   });
 
   it("per-action overrides win over the preset", () => {
@@ -73,5 +76,24 @@ describe("isShellAllowed", () => {
   it("ignores an invalid regex pattern instead of throwing", () => {
     const p = perms({ shell: { deny: [], allow: ["([unclosed"] } });
     expect(isShellAllowed(p, "anything")).toBe(false);
+  });
+});
+
+describe("isMcpDenied / isMcpAllowed", () => {
+  it("matches denylisted tool names", () => {
+    const p = perms({ mcp: { deny: ["dangerous-tool"], allow: [] } });
+    expect(isMcpDenied(p, "dangerous-tool")).toBe(true);
+    expect(isMcpDenied(p, "other")).toBe(false);
+  });
+
+  it("matches allowlisted tool names", () => {
+    const p = perms({ mcp: { deny: [], allow: ["^good-.*"] } });
+    expect(isMcpAllowed(p, "good-tool")).toBe(true);
+    expect(isMcpAllowed(p, "bad-tool")).toBe(false);
+  });
+
+  it("ignores invalid regex patterns", () => {
+    const p = perms({ mcp: { deny: ["([unclosed"], allow: [] } });
+    expect(isMcpDenied(p, "anything")).toBe(false);
   });
 });

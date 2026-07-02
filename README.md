@@ -117,6 +117,31 @@ working directory.
 Use `auto` only in a sandbox you trust (e.g. a container) — cody does no
 OS-level isolation itself.
 
+### MCP servers
+
+cody can connect to external MCP (Model Context Protocol) servers and import their tools as LangChain tools. Configure them in `cody.config.json` under an `mcp` block. Example:
+
+```jsonc
+{
+  "mcp": {
+    "servers": {
+      "math": {
+        "url": "https://math.example.com/mcp",
+        "headers": { "Authorization": "Bearer ${MATH_TOKEN}" },
+        "insecureTls": false,
+        "tools": ["add", "mul"]
+      }
+    }
+  }
+}
+```
+
+- Headers support `${VAR}` substitution from the process environment at resolve time; keep secrets in your local `.env` (git-ignored) per the config model.
+- `insecureTls: true` disables TLS verification process-wide (use only for internal CAs / dev servers) — this is global for the process and disables verification on outbound requests.
+- `tools` is an optional allowlist: only MCP tools with the unprefixed name in this array are kept for that server.
+
+MCP tools are imported namespaced as `serverName__toolName` (two underscores) and are wrapped by the same permission gate as built-in tools under a new `mcp` action: supervised mode prompts (`ask`), `auto` allows, and `readonly` denies. Use `permissions.mcp.allow` and `permissions.mcp.deny` (regex lists) to control MCP tools; the REPL's `[y/N/a]` always-allow option applies to tool *names* — it will add a regex-anchored allow pattern for the tool name to `permissions.mcp.allow` in `cody.config.json`. The `cody tools` command also lists connected MCP tools.
+
 ## Usage
 
 ```
