@@ -105,7 +105,11 @@ async function main(): Promise<void> {
 
     try {
       const promptModule = await import("./agent/prompt.js");
-      const systemPrompt = promptModule.withMcpServers(promptModule.SYSTEM_PROMPT, mcpForRun?.summaries ?? []);
+      const { loadSkillsCatalog } = await import("./skills.js");
+      const systemPrompt = promptModule.withSkills(
+        promptModule.withMcpServers(promptModule.SYSTEM_PROMPT, mcpForRun?.summaries ?? []),
+        loadSkillsCatalog(process.cwd()),
+      );
       const agent = createAgent({ model, tools, systemPrompt });
       for await (const chunk of streamAgentText(agent, task, {
         recursionLimit: config.limits.recursionLimit,

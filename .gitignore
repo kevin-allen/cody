@@ -27,3 +27,6 @@ coverage/
 # session DB
 .cody/*
 !.cody/skills/
+
+# local per-user config (never commit)
+cody.config.json
