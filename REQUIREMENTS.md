@@ -175,7 +175,10 @@ unsupervised use.
   show the exact command to be run.
 - FR-21 (denied → recover): An action that is `deny`, or that the user rejects
   at an `ask` prompt, returns a "denied" result to the agent so it can adapt,
-  rather than crashing the session.
+  rather than crashing the session. After a rejection the user may optionally
+  type a one-line reason; it is appended to the denial result ("[denied by
+  user — reason: …]") — the model's only signal for *why*, without which it
+  tends to re-propose the same action.
 - FR-22 (guards apply in every mode, including `auto`):
   - Working-directory confinement (FR-12) is **always** enforced, regardless
     of mode.

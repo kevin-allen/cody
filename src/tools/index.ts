@@ -24,11 +24,16 @@ export interface ApprovalRequest {
   readonly preapproved?: boolean;
 }
 
+/** Outcome of an approval prompt: approved, or denied with an optional reason. */
+export type ConfirmResult =
+  | { readonly approved: true }
+  | { readonly approved: false; readonly reason?: string };
+
 export interface ToolContext {
   readonly workdir: string;
   readonly config: Config;
-  /** Called for `ask` policies; returns true to proceed. */
-  readonly confirm: (req: ApprovalRequest) => Promise<boolean>;
+  /** Called for `ask` policies. A denial's reason is passed back to the model. */
+  readonly confirm: (req: ApprovalRequest) => Promise<ConfirmResult>;
 }
 
 /** Static metadata for each tool (name, action, description) — no context needed. */
@@ -52,8 +57,14 @@ export async function gate(
   if (policy === "deny") {
     return `[denied] "${req.action}" is not allowed in "${ctx.config.permissions.mode}" mode.`;
   }
-  if (policy === "ask" && !req.preapproved && !(await ctx.confirm(req))) {
-    return "[denied by user]";
+  if (policy === "ask" && !req.preapproved) {
+    const result = await ctx.confirm(req);
+    if (!result.approved) {
+      // The returned string becomes the tool result the model sees — the
+      // reason is its only signal for why, so it can adapt instead of
+      // re-proposing the same action (FR-21).
+      return result.reason ? `[denied by user — reason: ${result.reason}]` : "[denied by user]";
+    }
   }
   return exec();
 }

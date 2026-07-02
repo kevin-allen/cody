@@ -5,7 +5,7 @@ import { runCli } from "./cli.js";
 import { loadConfig, modelDefForRole } from "./config.js";
 import { getModel, assertToolCapable } from "./providers/factory.js";
 import { TOOL_INFO, resolvePolicy, createTools } from "./tools/index.js";
-import type { ApprovalRequest } from "./tools/index.js";
+import type { ApprovalRequest, ConfirmResult } from "./tools/index.js";
 import { createAgent, streamAgentText } from "./agent/graph.js";
 import { configureProxyFromEnv } from "./net/proxy.js";
 import { startRepl } from "./ui/repl.js";
@@ -65,11 +65,16 @@ async function main(): Promise<void> {
     assertToolCapable(model, "agent");
     // Headless: no interactive prompt exists yet, so an `ask` policy auto-denies.
     // The interactive REPL (milestone 5) supplies a real prompt. Use --auto to allow.
-    const confirm = (req: ApprovalRequest): Promise<boolean> => {
+    const confirm = (req: ApprovalRequest): Promise<ConfirmResult> => {
       process.stderr.write(
         `[headless: auto-denying "${req.action}"; re-run with --auto to allow]\n`,
       );
-      return Promise.resolve(false);
+      return Promise.resolve({
+        approved: false,
+        reason:
+          "headless mode auto-denies approvals; work with what read-only and " +
+          "allowlisted tools can provide, or tell the user to re-run with --auto",
+      });
     };
     const tools = createTools({ workdir: process.cwd(), config, confirm });
     const agent = createAgent({ model, tools });

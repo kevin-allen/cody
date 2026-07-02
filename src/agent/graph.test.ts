@@ -47,7 +47,7 @@ function ctx(mode: "auto" | "readonly"): ToolContext {
   return {
     workdir: wd,
     config: resolveConfig({ env: { CODY_MODE: mode } }),
-    confirm: () => Promise.resolve(true),
+    confirm: () => Promise.resolve({ approved: true as const }),
   };
 }
 

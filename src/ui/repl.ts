@@ -10,7 +10,7 @@ import {
 } from "../config.js";
 import { getModel, assertToolCapable } from "../providers/factory.js";
 import { createTools } from "../tools/index.js";
-import type { ApprovalRequest } from "../tools/index.js";
+import type { ApprovalRequest, ConfirmResult } from "../tools/index.js";
 import { createAgent, streamAgentText, repairDanglingToolCalls } from "../agent/graph.js";
 import type { UsageTotals } from "../agent/graph.js";
 import {
@@ -117,17 +117,25 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
   // effect immediately for the rest of the session (FR-22b).
   let liveConfig = deps.config;
 
-  const confirm = async (req: ApprovalRequest): Promise<boolean> => {
+  // On a denial, offer to tell the agent why — the reason lands in the tool
+  // result, so the model can adapt instead of re-proposing the same action.
+  const deny = async (): Promise<ConfirmResult> => {
+    const reason = (await askLine(p.dim("tell the agent why? (Enter to skip) "))).trim();
+    return reason ? { approved: false, reason } : { approved: false };
+  };
+
+  const confirm = async (req: ApprovalRequest): Promise<ConfirmResult> => {
     process.stdout.write(formatApproval(req, p));
     if (req.action !== "shell") {
       const answer = await askLine(`${p.bold("Apply?")} [y/N] `);
-      return isAffirmative(answer);
+      return isAffirmative(answer) ? { approved: true } : deny();
     }
     const answer = await askLine(
       `${p.bold("Apply?")} [y/N/a] ${p.dim("(a = yes, and always allow this command)")} `,
     );
     const parsed = parseApprovalAnswer(answer);
-    if (parsed !== "always") return parsed === "yes";
+    if (parsed === "no") return deny();
+    if (parsed !== "always") return { approved: true };
     const pattern = commandToAllowPattern(req.preview);
     liveConfig = withShellAllowPattern(liveConfig, pattern);
     try {
@@ -139,7 +147,7 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
           `(${(err as Error).message}) — allowed for this session only\n`,
       );
     }
-    return true;
+    return { approved: true };
   };
 
   const tools = createTools({

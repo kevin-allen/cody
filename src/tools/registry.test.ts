@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { resolveConfig } from "../config.js";
 import type { Config } from "../config.js";
 import { createTools } from "./index.js";
-import type { ToolContext } from "./index.js";
+import type { ToolContext, ConfirmResult } from "./index.js";
 
 let wd: string;
 
@@ -16,7 +16,7 @@ beforeEach(() => {
 
 afterEach(() => rmSync(wd, { recursive: true, force: true }));
 
-function tools(config: Config, confirm = vi.fn(async () => true)) {
+function tools(config: Config, confirm = vi.fn(async (): Promise<ConfirmResult> => ({ approved: true }))) {
   const ctx: ToolContext = { workdir: wd, config, confirm };
   return {
     confirm,
@@ -28,7 +28,7 @@ describe("permission gate through the tools", () => {
   it("supervised: write asks, then applies on approval", async () => {
     const { map, confirm } = tools(
       resolveConfig(),
-      vi.fn(async () => true),
+      vi.fn(async (): Promise<ConfirmResult> => ({ approved: true })),
     );
     const res = await map.write_file!.invoke({ path: "g.txt", content: "hi" });
     expect(confirm).toHaveBeenCalledOnce();
@@ -39,11 +39,26 @@ describe("permission gate through the tools", () => {
   it("supervised: a rejected prompt does not write", async () => {
     const { map } = tools(
       resolveConfig(),
-      vi.fn(async () => false),
+      vi.fn(async (): Promise<ConfirmResult> => ({ approved: false })),
     );
     const res = await map.write_file!.invoke({ path: "g.txt", content: "hi" });
     expect(existsSync(join(wd, "g.txt"))).toBe(false);
     expect(res).toContain("denied by user");
+  });
+
+  it("a denial reason is passed through to the model in the tool result", async () => {
+    const { map } = tools(
+      resolveConfig(),
+      vi.fn(
+        async (): Promise<ConfirmResult> => ({
+          approved: false,
+          reason: "wrong file — edit config.ts instead",
+        }),
+      ),
+    );
+    const res = await map.write_file!.invoke({ path: "g.txt", content: "hi" });
+    expect(existsSync(join(wd, "g.txt"))).toBe(false);
+    expect(res).toContain("[denied by user — reason: wrong file — edit config.ts instead]");
   });
 
   it("readonly: write is denied without asking", async () => {
@@ -64,7 +79,7 @@ describe("permission gate through the tools", () => {
   it("read is allowed without asking", async () => {
     const { map, confirm } = tools(
       resolveConfig(),
-      vi.fn(async () => false),
+      vi.fn(async (): Promise<ConfirmResult> => ({ approved: false })),
     );
     const res = await map.read_file!.invoke({ path: "f.txt" });
     expect(res).toContain("one");
@@ -82,7 +97,7 @@ describe("permission gate through the tools", () => {
       resolveConfig({
         fileConfig: { permissions: { shell: { deny: [], allow: ["^echo\\s"] } } },
       }),
-      vi.fn(async () => false),
+      vi.fn(async (): Promise<ConfirmResult> => ({ approved: false })),
     );
     const res = await map.run_shell!.invoke({ command: "echo hi" });
     expect(confirm).not.toHaveBeenCalled();
@@ -94,7 +109,7 @@ describe("permission gate through the tools", () => {
       resolveConfig({
         fileConfig: { permissions: { shell: { deny: [], allow: ["^echo\\s"] } } },
       }),
-      vi.fn(async () => false),
+      vi.fn(async (): Promise<ConfirmResult> => ({ approved: false })),
     );
     const res = await map.run_shell!.invoke({ command: "printf hi" });
     expect(confirm).toHaveBeenCalledOnce();
