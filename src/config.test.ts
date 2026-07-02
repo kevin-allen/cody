@@ -97,6 +97,7 @@ describe("modelDefForRole", () => {
       roles: { agent: "ghost" },
       permissions: DEFAULT_CONFIG.permissions,
       limits: DEFAULT_CONFIG.limits,
+      sessions: DEFAULT_CONFIG.sessions,
     };
     expect(() => modelDefForRole(c, "agent")).toThrow(/not in the catalog/);
   });
@@ -123,6 +124,26 @@ describe("limits.recursionLimit", () => {
     expect(resolveConfig({ fileConfig: { limits: { recursionLimit: 0 } } }).limits.recursionLimit).toBe(200);
     expect(resolveConfig({ fileConfig: { limits: { recursionLimit: -5 } } }).limits.recursionLimit).toBe(200);
     expect(resolveConfig({ fileConfig: { limits: { recursionLimit: 2.5 } } }).limits.recursionLimit).toBe(200);
+  });
+});
+
+describe("sessions configuration", () => {
+  it("defaults to enabled true and no path", () => {
+    const c = resolveConfig();
+    expect(c.sessions.enabled).toBe(true);
+    expect(c.sessions.path).toBeUndefined();
+  });
+
+  it("can be overridden by the config file", () => {
+    const c = resolveConfig({ fileConfig: { sessions: { enabled: false, path: "data/sessions.db" } } });
+    expect(c.sessions.enabled).toBe(false);
+    expect(c.sessions.path).toBe("data/sessions.db");
+  });
+
+  it("ignores invalid values and falls back to defaults", () => {
+    const c = resolveConfig({ fileConfig: { sessions: { enabled: "yes" as unknown as boolean, path: "" } } });
+    expect(c.sessions.enabled).toBe(DEFAULT_CONFIG.sessions.enabled);
+    expect(c.sessions.path).toBeUndefined();
   });
 });
 

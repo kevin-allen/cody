@@ -31,6 +31,11 @@ export interface LimitsConfig {
   readonly recursionLimit: number;
 }
 
+export interface SessionsConfig {
+  readonly enabled: boolean;
+  readonly path?: string;
+}
+
 export interface Config {
   /** Named model catalog. Must contain a "default" entry. */
   readonly models: Record<string, ModelDef>;
@@ -38,6 +43,7 @@ export interface Config {
   readonly roles: Record<string, string>;
   readonly permissions: PermissionsConfig;
   readonly limits: LimitsConfig;
+  readonly sessions: SessionsConfig;
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -51,6 +57,7 @@ export const DEFAULT_CONFIG: Config = {
     shell: { deny: ["rm\\s+-rf\\s+/", "git\\s+push", ":\\(\\)\\s*\\{"], allow: [] },
   },
   limits: { recursionLimit: 200 },
+  sessions: { enabled: true },
 };
 
 const PERMISSION_MODES: readonly PermissionMode[] = ["supervised", "auto", "readonly"];
@@ -107,6 +114,12 @@ export function resolveConfig(inputs: ResolveInputs = {}): Config {
         : DEFAULT_CONFIG.limits.recursionLimit,
   };
 
+  const fileSessions = fileConfig.sessions ?? {};
+  const sessions = {
+    enabled: typeof fileSessions.enabled === "boolean" ? fileSessions.enabled : DEFAULT_CONFIG.sessions.enabled,
+    path: typeof fileSessions.path === "string" && fileSessions.path.length > 0 ? fileSessions.path : undefined,
+  } as SessionsConfig;
+
   // --- environment overrides ---
   const ollamaBaseUrl = env.OLLAMA_BASE_URL;
   if (ollamaBaseUrl) {
@@ -125,7 +138,7 @@ export function resolveConfig(inputs: ResolveInputs = {}): Config {
   if (flags.model) roles.agent = flags.model;
   if (flags.mode) permissions = { ...permissions, mode: flags.mode };
 
-  return { models, roles, permissions, limits };
+  return { models, roles, permissions, limits, sessions };
 }
 
 interface Flags {
