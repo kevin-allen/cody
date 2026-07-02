@@ -92,7 +92,12 @@ describe("modelDefForRole", () => {
   });
 
   it("throws when a role points at a missing model and there is no default", () => {
-    const c = { models: {}, roles: { agent: "ghost" }, permissions: DEFAULT_CONFIG.permissions };
+    const c = {
+      models: {},
+      roles: { agent: "ghost" },
+      permissions: DEFAULT_CONFIG.permissions,
+      limits: DEFAULT_CONFIG.limits,
+    };
     expect(() => modelDefForRole(c, "agent")).toThrow(/not in the catalog/);
   });
 
@@ -101,6 +106,23 @@ describe("modelDefForRole", () => {
     const c = resolveConfig({ env: { CODY_AGENT_MODEL: "typo" } });
     expect(c.models.default).toBeDefined(); // default exists...
     expect(() => modelDefForRole(c, "agent")).toThrow(/not in the catalog/); // ...but we still error
+  });
+});
+
+describe("limits.recursionLimit", () => {
+  it("defaults to 200", () => {
+    expect(resolveConfig().limits.recursionLimit).toBe(200);
+  });
+
+  it("can be overridden by the config file", () => {
+    const c = resolveConfig({ fileConfig: { limits: { recursionLimit: 50 } } });
+    expect(c.limits.recursionLimit).toBe(50);
+  });
+
+  it("ignores non-positive or non-integer values", () => {
+    expect(resolveConfig({ fileConfig: { limits: { recursionLimit: 0 } } }).limits.recursionLimit).toBe(200);
+    expect(resolveConfig({ fileConfig: { limits: { recursionLimit: -5 } } }).limits.recursionLimit).toBe(200);
+    expect(resolveConfig({ fileConfig: { limits: { recursionLimit: 2.5 } } }).limits.recursionLimit).toBe(200);
   });
 });
 

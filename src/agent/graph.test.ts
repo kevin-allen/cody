@@ -10,7 +10,9 @@ import type { ChatResult } from "@langchain/core/outputs";
 import { resolveConfig } from "../config.js";
 import { createTools } from "../tools/index.js";
 import type { ToolContext } from "../tools/index.js";
-import { createAgent, runAgentOnce } from "./graph.js";
+import { MemorySaver } from "@langchain/langgraph";
+import { HumanMessage } from "@langchain/core/messages";
+import { createAgent, runAgentOnce, repairDanglingToolCalls } from "./graph.js";
 
 /**
  * A minimal chat model that returns a scripted sequence of AI messages,
@@ -81,5 +83,54 @@ describe("agent ReAct loop", () => {
 
     expect(existsSync(join(wd, "out.txt"))).toBe(false); // gate denied the write
     expect(result).toContain("could not");
+  });
+});
+
+describe("repairDanglingToolCalls", () => {
+  it("repairs a thread poisoned by a turn that died mid tool-call, so the next turn works", async () => {
+    const model = new ScriptedToolModel([
+      new AIMessage({
+        content: "",
+        tool_calls: [{ id: "c1", name: "list_dir", args: { path: "." } }],
+      }),
+      new AIMessage({ content: "Done." }),
+    ]);
+    const agent = createAgent({
+      model,
+      tools: createTools(ctx("auto")),
+      checkpointer: new MemorySaver(),
+    });
+    const config = { configurable: { thread_id: "t1" } };
+
+    // Recursion limit 1 kills the turn right after the model emits tool_calls,
+    // leaving them dangling in the checkpoint — the poisoned-thread scenario.
+    await expect(
+      agent.invoke({ messages: [new HumanMessage("go")] }, { ...config, recursionLimit: 1 }),
+    ).rejects.toThrow(/[Rr]ecursion limit/);
+
+    expect(await repairDanglingToolCalls(agent, "t1")).toBe(true);
+
+    // The synthetic tool result is in the thread and the next turn completes.
+    const state = await agent.getState(config);
+    const messages = (state.values as { messages: BaseMessage[] }).messages;
+    expect(messages.at(-1)?._getType()).toBe("tool");
+    expect(messages.at(-1)?.content).toContain("[interrupted");
+
+    const result = await agent.invoke({ messages: [new HumanMessage("continue")] }, config);
+    const final = result.messages.at(-1);
+    expect(final?.content).toContain("Done");
+  });
+
+  it("is a no-op on a healthy thread", async () => {
+    const model = new ScriptedToolModel([new AIMessage({ content: "Hi." })]);
+    const agent = createAgent({
+      model,
+      tools: createTools(ctx("auto")),
+      checkpointer: new MemorySaver(),
+    });
+    const config = { configurable: { thread_id: "t2" } };
+    await agent.invoke({ messages: [new HumanMessage("hello")] }, config);
+
+    expect(await repairDanglingToolCalls(agent, "t2")).toBe(false);
   });
 });

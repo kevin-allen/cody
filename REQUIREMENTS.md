@@ -210,7 +210,10 @@ invasive.
 - FR-26: Commands: `/exit` (quit), `/clear` (reset conversation), `/help`
   (list commands). More can be added later.
 - FR-27: Graceful handling of errors (network, provider, tool failures)
-  without crashing the session.
+  without crashing the session. A turn that errors or is cancelled mid
+  tool-call must not corrupt the conversation: cody repairs the thread's
+  dangling tool calls (synthetic "[interrupted]" results) so the next turn
+  still works.
 - FR-34 (cooperative rendering): cody **never** uses the alternate screen
   buffer, a full-screen layout/redraw loop, or mouse capture. All output is
   appended to normal scrollback; cody leaves the terminal as it found it on
@@ -263,6 +266,10 @@ invasive.
         "deny": ["rm\\s+-rf\\s+/", "git\\s+push", ":\\(\\)\\s*\\{"], // blocks in every mode
         "allow": ["^git\\s+status", "^pnpm\\s+test"] // optional: skips the ask prompt
       }
+    },
+    "limits": {
+      "recursionLimit": 200 // max agent super-steps per turn (~2 per tool round);
+                            // a runaway-loop cost backstop, not a task budget
     }
   }
   ```

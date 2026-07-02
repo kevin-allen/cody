@@ -22,12 +22,22 @@ export interface PermissionsConfig {
   readonly shell: { readonly deny: readonly string[]; readonly allow: readonly string[] };
 }
 
+export interface LimitsConfig {
+  /**
+   * Max LangGraph super-steps per turn (~2 per tool round). A backstop against
+   * runaway model loops (unbounded API spend), not a task budget — real tasks
+   * should never hit it.
+   */
+  readonly recursionLimit: number;
+}
+
 export interface Config {
   /** Named model catalog. Must contain a "default" entry. */
   readonly models: Record<string, ModelDef>;
   /** Task role -> model name in the catalog. */
   readonly roles: Record<string, string>;
   readonly permissions: PermissionsConfig;
+  readonly limits: LimitsConfig;
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -40,6 +50,7 @@ export const DEFAULT_CONFIG: Config = {
     overrides: {},
     shell: { deny: ["rm\\s+-rf\\s+/", "git\\s+push", ":\\(\\)\\s*\\{"], allow: [] },
   },
+  limits: { recursionLimit: 200 },
 };
 
 const PERMISSION_MODES: readonly PermissionMode[] = ["supervised", "auto", "readonly"];
@@ -88,6 +99,14 @@ export function resolveConfig(inputs: ResolveInputs = {}): Config {
     },
   };
 
+  const fileLimit = fileConfig.limits?.recursionLimit;
+  const limits: LimitsConfig = {
+    recursionLimit:
+      typeof fileLimit === "number" && Number.isInteger(fileLimit) && fileLimit > 0
+        ? fileLimit
+        : DEFAULT_CONFIG.limits.recursionLimit,
+  };
+
   // --- environment overrides ---
   const ollamaBaseUrl = env.OLLAMA_BASE_URL;
   if (ollamaBaseUrl) {
@@ -106,7 +125,7 @@ export function resolveConfig(inputs: ResolveInputs = {}): Config {
   if (flags.model) roles.agent = flags.model;
   if (flags.mode) permissions = { ...permissions, mode: flags.mode };
 
-  return { models, roles, permissions };
+  return { models, roles, permissions, limits };
 }
 
 interface Flags {

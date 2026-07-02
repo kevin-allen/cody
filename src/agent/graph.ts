@@ -1,5 +1,6 @@
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
-import { HumanMessage } from "@langchain/core/messages";
+import { HumanMessage, ToolMessage } from "@langchain/core/messages";
+import type { AIMessage, BaseMessage } from "@langchain/core/messages";
 import type { BaseCheckpointSaver } from "@langchain/langgraph";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { StructuredToolInterface } from "@langchain/core/tools";
@@ -39,9 +40,42 @@ export interface StreamOptions {
   readonly threadId?: string;
   /** Abort signal to cancel the turn (e.g. on Ctrl-C). */
   readonly signal?: AbortSignal;
+  /** Max super-steps per turn; overrides LangGraph's default of 25. */
+  readonly recursionLimit?: number;
 }
 
 export type Agent = ReturnType<typeof createAgent>;
+
+/**
+ * Repair a thread whose last message is an AI message with tool calls that
+ * never got tool results — what an errored or cancelled turn leaves behind.
+ * Providers reject such history on every later turn, so without repair the
+ * whole thread is unusable (FR-27). Appends a synthetic "[interrupted]" tool
+ * result for each dangling call. Returns true if a repair was made.
+ */
+export async function repairDanglingToolCalls(agent: Agent, threadId: string): Promise<boolean> {
+  const config = { configurable: { thread_id: threadId } };
+  const state = await agent.getState(config);
+  const messages = (state.values as { messages?: BaseMessage[] }).messages ?? [];
+  const last = messages.at(-1);
+  if (!last || last._getType() !== "ai") return false;
+  const dangling = ((last as AIMessage).tool_calls ?? []).filter((c) => c.id);
+  if (dangling.length === 0) return false;
+  await agent.updateState(
+    config,
+    {
+      messages: dangling.map(
+        (c) =>
+          new ToolMessage({
+            content: "[interrupted — the turn ended before this tool ran]",
+            tool_call_id: c.id as string,
+          }),
+      ),
+    },
+    "tools", // write as if the tools node responded, so the graph resumes at the model
+  );
+  return true;
+}
 
 /** Run one turn to completion and return the assistant's final text. */
 export async function runAgentOnce(agent: Agent, userText: string): Promise<string> {
@@ -65,6 +99,7 @@ export async function* streamAgentText(
     {
       streamMode: "messages",
       signal: opts.signal,
+      ...(opts.recursionLimit ? { recursionLimit: opts.recursionLimit } : {}),
       ...(opts.threadId ? { configurable: { thread_id: opts.threadId } } : {}),
     },
   );

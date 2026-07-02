@@ -68,6 +68,10 @@ defaults → `cody.config.json` in the working directory → environment variabl
       "deny": ["rm\\s+-rf\\s+/", "git\\s+push"], // blocked in every mode
       "allow": ["^git\\s+status", "^pnpm\\s+test"] // auto-approved (skips the ask)
     }
+  },
+  "limits": {
+    "recursionLimit": 200 // max agent steps per turn (~2 per tool call);
+                          // backstop against runaway loops, not a task budget
   }
 }
 ```

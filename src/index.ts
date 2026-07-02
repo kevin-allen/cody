@@ -73,7 +73,10 @@ async function main(): Promise<void> {
     };
     const tools = createTools({ workdir: process.cwd(), config, confirm });
     const agent = createAgent({ model, tools });
-    for await (const chunk of streamAgentText(agent, task)) process.stdout.write(chunk);
+    for await (const chunk of streamAgentText(agent, task, {
+      recursionLimit: config.limits.recursionLimit,
+    }))
+      process.stdout.write(chunk);
     process.stdout.write("\n");
     return;
   }

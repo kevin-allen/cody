@@ -11,7 +11,7 @@ import {
 import { getModel, assertToolCapable } from "../providers/factory.js";
 import { createTools } from "../tools/index.js";
 import type { ApprovalRequest } from "../tools/index.js";
-import { createAgent, streamAgentText } from "../agent/graph.js";
+import { createAgent, streamAgentText, repairDanglingToolCalls } from "../agent/graph.js";
 import type { UsageTotals } from "../agent/graph.js";
 import {
   makePalette,
@@ -183,6 +183,7 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
       for await (const chunk of streamAgentText(agent, input, {
         threadId,
         signal: currentAbort.signal,
+        recursionLimit: deps.config.limits.recursionLimit,
         onUsage: (usage: UsageTotals) => {
           sessionInputTokens += usage.inputTokens;
           sessionOutputTokens += usage.outputTokens;
@@ -204,6 +205,14 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     } catch (err) {
       if (currentAbort.signal.aborted) process.stdout.write(`\n${p.dim("(cancelled)")}\n`);
       else process.stdout.write(`\n${p.red("error:")} ${(err as Error).message}\n`);
+      // A turn that died mid tool-call leaves dangling tool_calls in the
+      // thread, which providers reject on every later turn — repair it so the
+      // conversation stays usable (FR-27). Best effort.
+      try {
+        await repairDanglingToolCalls(agent, threadId);
+      } catch {
+        // repair is best-effort; /clear remains the fallback
+      }
     } finally {
       currentAbort = null;
       busy = false;
