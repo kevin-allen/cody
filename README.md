@@ -95,7 +95,8 @@ defaults → `cody.config.json` in the working directory → environment variabl
 Writes and edits show a diff before asking; shell commands show the exact
 command. After a rejection you can optionally type a one-line reason for the
 agent — it lands in the tool result, so the model adapts instead of retrying
-the same thing. A shell **denylist** blocks matching commands in *every* mode,
+the same thing. Anything you type while a turn is still streaming is queued
+and runs when the turn ends. A shell **denylist** blocks matching commands in *every* mode,
 including `auto`. A shell **allowlist** auto-approves matching commands that
 would otherwise ask (handy for `git status`, test runs, …) — the denylist
 still wins over it, and it never overrides `readonly`. At a shell approval

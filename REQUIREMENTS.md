@@ -217,6 +217,9 @@ invasive.
   tool-call must not corrupt the conversation: cody repairs the thread's
   dangling tool calls (synthetic "[interrupted]" results) so the next turn
   still works.
+- FR-27a (never drop input): a line typed while a turn is streaming is queued
+  and dispatched in order when the turn ends — not silently discarded. Answers
+  to a pending approval prompt take precedence and are consumed as answers.
 - FR-34 (cooperative rendering): cody **never** uses the alternate screen
   buffer, a full-screen layout/redraw loop, or mouse capture. All output is
   appended to normal scrollback; cody leaves the terminal as it found it on

@@ -163,6 +163,8 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
   let clears = 0;
   let busy = false;
   let currentAbort: AbortController | null = null;
+  // Lines typed while a turn is streaming, dispatched when it ends (FR-27a).
+  const queuedInputs: string[] = [];
 
   // session running totals for token usage
   let sessionInputTokens = 0;
@@ -224,7 +226,7 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     } finally {
       currentAbort = null;
       busy = false;
-      rl.prompt();
+      drainQueuedInputs();
     }
   }
 
@@ -255,19 +257,7 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     rl.prompt();
   }
 
-  rl.on("line", (line) => {
-    if (pendingAnswer) {
-      const resolve = pendingAnswer;
-      pendingAnswer = null;
-      resolve(line);
-      return;
-    }
-    if (busy) return; // ignore input typed while a turn is streaming
-    const input = restorePaste(line).trim();
-    if (!input) {
-      rl.prompt();
-      return;
-    }
+  function dispatch(input: string): void {
     if (isBareQuit(input)) {
       process.stdout.write(p.dim("(use /exit or press Ctrl-D to quit)\n"));
       rl.prompt();
@@ -278,6 +268,41 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
       return;
     }
     void runTurn(input);
+  }
+
+  function drainQueuedInputs(): void {
+    // Dispatch until a queued input starts a new turn (busy) or none are left.
+    while (!busy && queuedInputs.length > 0) {
+      const input = queuedInputs.shift()!;
+      process.stdout.write(`${promptStr}${input} ${p.dim("(queued)")}\n`);
+      dispatch(input);
+    }
+    if (!busy && queuedInputs.length === 0) rl.prompt();
+  }
+
+  rl.on("line", (line) => {
+    if (pendingAnswer) {
+      const resolve = pendingAnswer;
+      pendingAnswer = null;
+      resolve(line);
+      return;
+    }
+    if (busy) {
+      // Queue input typed while a turn is streaming instead of dropping it;
+      // it is dispatched as soon as the turn ends (FR-27a).
+      const queued = restorePaste(line).trim();
+      if (queued) {
+        queuedInputs.push(queued);
+        process.stdout.write(p.dim(`(queued for after this turn: ${queued})\n`));
+      }
+      return;
+    }
+    const input = restorePaste(line).trim();
+    if (!input) {
+      rl.prompt();
+      return;
+    }
+    dispatch(input);
   });
 
   rl.prompt();
