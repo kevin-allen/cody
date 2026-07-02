@@ -33,3 +33,15 @@ export function withMcpServers(base: string, summaries: McpServerSummary[]): str
   lines.push("", "Prefer these tools over local file search for questions in their domain.");
   return lines.join("\n");
 }
+
+export function withSkills(base: string, skills: import("../skills.js").SkillMeta[]): string {
+  if (!skills || skills.length === 0) return base;
+  const lines = [base, "", "## Skills"];
+  for (const s of skills) {
+    const tags = s.tags && s.tags.length > 0 ? s.tags.join(",") : "";
+    const desc = s.description ?? "";
+    lines.push(`- ${s.name} [${tags}]: ${desc}`);
+  }
+  lines.push("", "When a task matches a skill, call load_skill with its name and follow the returned instructions.");
+  return lines.join("\n");
+}

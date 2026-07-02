@@ -11,6 +11,7 @@ import {
   prepareWrite,
   prepareEdit,
 } from "./fs.js";
+import { resolveWithinWorkdir } from "./paths.js";
 import { runShell } from "./shell.js";
 
 export { resolvePolicy, isShellDenied, isShellAllowed, isMcpAllowed, isMcpDenied } from "./permissions.js";
@@ -223,5 +224,56 @@ export function createTools(ctx: ToolContext): StructuredToolInterface[] {
     },
   );
 
-  return [readFile, listDir, glob, grep, writeFile, editFile, runShellTool];
+  // skill tools: read-only actions that expose installed skills under .cody/skills
+  const loadSkill = tool(
+    ({ name }) =>
+      gate(ctx, { action: "read", title: `Load skill ${name}`, preview: name }, () => {
+        try {
+          /* ensure skill dir exists and is within workdir */
+          resolveWithinWorkdir(ctx.workdir, `.cody/skills/${name}`);
+          // read SKILL.md
+          const md = readFileWithin(ctx.workdir, `.cody/skills/${name}/SKILL.md`);
+          // strip frontmatter
+          const body = md.replace(/^---[\s\S]*?---\s*/m, "");
+          // list files recursively
+          const list = globWithin(ctx.workdir, `.cody/skills/${name}/**/*`).then((out) => {
+            const files = out
+              .split(/\r?\n/)
+              .filter((l) => l && !l.endsWith("/"))
+              .map((p) => p.replace(new RegExp(`^${name}/`), ""));
+            return `${body}\n\nFiles in this skill:\n${files.join("\n")}`;
+          });
+          return list.catch(friendlyError);
+        } catch (e) {
+          return friendlyError(e);
+        }
+      }),
+    {
+      name: "load_skill",
+      description: "Load an installed skill's SKILL.md body and file list.",
+      schema: z.object({ name: z.string().describe("Skill directory name") }),
+    },
+  );
+
+  const readSkillFile = tool(
+    ({ name, path }) =>
+      gate(ctx, { action: "read", title: `Read skill ${name}:${path}`, preview: `${name}:${path}` }, () => {
+        try {
+          const full = `.cody/skills/${name}/${path}`;
+          // ensure within
+          /* ensure path is within workdir */
+          resolveWithinWorkdir(ctx.workdir, full);
+          return readFileWithin(ctx.workdir, full);
+        } catch (e) {
+          return friendlyError(e);
+        }
+      }),
+    {
+      name: "read_skill_file",
+      description: "Read a file inside an installed skill directory.",
+      schema: z.object({ name: z.string().describe("Skill directory name"), path: z.string().describe("Path within the skill dir") }),
+    },
+  );
+
+  return [readFile, listDir, glob, grep, writeFile, editFile, runShellTool, loadSkill, readSkillFile];
 }

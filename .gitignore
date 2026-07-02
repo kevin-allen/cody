@@ -25,4 +25,5 @@ pnpm-debug.log*
 coverage/
 
 # session DB
-.cody/
+.cody/*
+!.cody/skills/

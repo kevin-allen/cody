@@ -37,7 +37,7 @@ import {
   DISABLE_BRACKETED_PASTE,
 } from "./paste.js";
 
-export type SlashCommand = "exit" | "clear" | "help" | "usage" | "sessions" | "resume" | "title" | "compact" | "unknown";
+export type SlashCommand = "exit" | "clear" | "help" | "usage" | "sessions" | "resume" | "title" | "compact" | "skills" | "unknown";
 
 /** Parse a slash command (pure — for testing). */
 export function parseSlash(input: string): { cmd: SlashCommand; arg?: string } {
@@ -231,7 +231,10 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
 
   // Build the agent prompt possibly augmented with MCP server summaries
   const promptModule = await import("../agent/prompt.js");
-  const systemPrompt = promptModule.withMcpServers(promptModule.SYSTEM_PROMPT, deps.mcpSummaries ?? []);
+  // build skills catalog and include in system prompt
+  const skillsModule = await import("../skills.js");
+  const skills = skillsModule.loadSkillsCatalog(deps.cwd);
+  const systemPrompt = promptModule.withSkills(promptModule.withMcpServers(promptModule.SYSTEM_PROMPT, deps.mcpSummaries ?? []), skills);
 
   const store = deps.store;
   const saver = store ? store.saver : new MemorySaver();
@@ -485,6 +488,17 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
   async function handleCommand(input: string): Promise<void> {
     const parsed = parseSlash(input);
     switch (parsed.cmd) {
+      case "skills": {
+        const skillsModule = await import("../skills.js");
+        const skills = skillsModule.loadSkillsCatalog(deps.cwd);
+        if (!skills || skills.length === 0) {
+          process.stdout.write("(no skills installed)\n");
+        } else {
+          for (const s of skills) process.stdout.write(`- ${s.name} [${s.tags.join(",")}]: ${s.description}\n`);
+        }
+        rl.prompt();
+        return;
+      }
       case "exit":
         rl.close();
         return;
