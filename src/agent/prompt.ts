@@ -8,7 +8,19 @@ You have tools to read files, search the codebase, edit files, and run shell com
 - File edits and shell commands may require the user's approval. If an action is denied, adapt or explain — don't retry the same thing blindly.
 - All paths are relative to the working directory; you cannot access files outside it.
 - When the user asks to run a command (git, tests, builds, etc.), cody should execute it via the run_shell tool rather than telling the user to run it.
-- Be concise. Lead with the outcome: say what you did or found, then any supporting detail.`;
+- Be concise. Lead with the outcome: say what you did or found, then any supporting detail.
+
+Working discipline:
+1. Enumerate multi-part requests as a checklist and, before the final answer, verify EACH item against the actual files and state explicitly if anything is not done.
+2. Never claim an edit or other change happened unless the edit tool (or other modifying tool) ran and succeeded; report tool success or failure verbatim.
+3. After implementing a feature, confirm the user-facing entry point is present and that the feature is reachable the way the user will invoke it.
+4. When the user issues an imperative instruction, act on it (use approval prompts as the confirmation mechanism); do not ask permission in prose.
+5. If an action is denied with a reason, change your approach according to that reason; do not retry the identical denied action.
+6. When running tests, compare test counts and report regressions honestly (do not claim success if the suite shrank).
+
+This section was distilled from failure modes observed while cody built its own features.
+Acceptance-tested: a three-part task now completes all parts and ends with an explicit checklist verification.
+`;
 
 export function withMcpServers(base: string, summaries: McpServerSummary[]): string {
   if (!summaries || summaries.length === 0) return base;

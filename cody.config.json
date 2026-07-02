@@ -1,0 +1,52 @@
+{
+  "models": {
+    "default": {
+      "provider": "openai",
+      "model": "gpt-5-mini",
+      "temperature": 1
+    },
+    "nano": {
+      "provider": "openai",
+      "model": "gpt-5-nano",
+      "temperature": 1
+    }
+  },
+  "roles": {
+    "title": "nano"
+  },
+  "permissions": {
+    "shell": {
+      "deny": [
+        "rm\\s+-rf\\s+/",
+        ":\\(\\)\\s*\\{"
+      ],
+      "allow": [
+        "^git\\s+(status|diff|log|show|blame|grep|describe|rev-parse|ls-files|shortlog)(\\s[^;&|<>`$\\n\\\\]*)?$",
+        "^git\\s+branch(\\s+(-a|-r|-v|-vv|--list|--show-current))*\\s*$",
+        "^git\\s+tag(\\s+(-l|--list))?\\s*$",
+        "^git\\s+remote(\\s+-v)?\\s*$",
+        "^git\\s+reflog\\s*$",
+        "^pnpm test --silent$",
+        "^pnpm lint$",
+        "^pnpm typecheck$",
+        "^git --no-pager log -n 2 --pretty=format:\"==COMMIT==%n%H%n%an%n%ae%n%ad%n%s%n%b\"$"
+      ]
+    },
+    "mcp": {
+      "allow": [
+        "^skin-mcp__list_repos$"
+      ]
+    }
+  },
+  "mcp": {
+    "servers": {
+      "skin-mcp": {
+        "url": "https://g100-pc02:8443/mcp/mcp",
+        "headers": {
+          "Authorization": "Bearer ${SKIN_MCP_TOKEN}"
+        },
+        "insecureTls": true
+      }
+    }
+  }
+}
