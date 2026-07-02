@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { colorEnabled, makePalette, isAffirmative, formatDiff, formatApproval } from "./render.js";
+import {
+  colorEnabled,
+  makePalette,
+  isAffirmative,
+  parseApprovalAnswer,
+  formatDiff,
+  formatApproval,
+} from "./render.js";
 
 describe("colorEnabled", () => {
   it("is on for a TTY with no NO_COLOR", () => {
@@ -31,6 +38,20 @@ describe("isAffirmative", () => {
   });
   it("rejects everything else (default no)", () => {
     for (const a of ["", "n", "no", "nope", "yeah", "sure"]) expect(isAffirmative(a)).toBe(false);
+  });
+});
+
+describe("parseApprovalAnswer", () => {
+  it("y / yes -> yes", () => {
+    for (const a of ["y", "Y", "yes", " YES "]) expect(parseApprovalAnswer(a)).toBe("yes");
+  });
+  it("a / always -> always", () => {
+    for (const a of ["a", "A", "always", " Always "]) expect(parseApprovalAnswer(a)).toBe("always");
+  });
+  it("everything else -> no (default)", () => {
+    for (const a of ["", "n", "no", "all", "ay", "yes always"]) {
+      expect(parseApprovalAnswer(a)).toBe("no");
+    }
   });
 });
 

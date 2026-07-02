@@ -185,6 +185,13 @@ unsupervised use.
   auto-approves matching commands that would otherwise `ask` (e.g. `^git\s+status`
   in `supervised` mode). It only skips the prompt: the denylist still wins over
   it, and it never upgrades a `deny` policy (so `readonly` stays readonly).
+- FR-22b (always allow): the interactive shell approval prompt is `[y/N/a]`;
+  answering `a`/`always` approves the command AND appends it — regex-escaped
+  and `^…$`-anchored, so exactly that command — to `permissions.shell.allow`
+  in the project's `cody.config.json` (created if absent, other fields
+  preserved). The addition takes effect immediately in the running session.
+  If the file can't be written, the command is allowed for the session only,
+  with a warning.
 - FR-23 (explicit + visible): `auto` mode must be enabled **explicitly** (via
   `permissions.mode: "auto"`, or `--auto` / `CODY_MODE=auto`) — it is never the
   default. On startup cody prints a banner stating the active mode, so an

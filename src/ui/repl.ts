@@ -2,12 +2,24 @@ import { createInterface } from "node:readline";
 import type { Transform } from "node:stream";
 import { MemorySaver } from "@langchain/langgraph";
 import type { Config } from "../config.js";
-import { modelDefForRole } from "../config.js";
+import {
+  modelDefForRole,
+  commandToAllowPattern,
+  withShellAllowPattern,
+  saveShellAllowPattern,
+} from "../config.js";
 import { getModel, assertToolCapable } from "../providers/factory.js";
 import { createTools } from "../tools/index.js";
 import type { ApprovalRequest } from "../tools/index.js";
 import { createAgent, streamAgentText } from "../agent/graph.js";
-import { makePalette, colorEnabled, banner, formatApproval, isAffirmative } from "./render.js";
+import {
+  makePalette,
+  colorEnabled,
+  banner,
+  formatApproval,
+  isAffirmative,
+  parseApprovalAnswer,
+} from "./render.js";
 import type { Palette } from "./render.js";
 import {
   createPasteFilterStream,
@@ -98,13 +110,42 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     });
   };
 
+  // The gate reads config at each tool invocation, so an "always" answer takes
+  // effect immediately for the rest of the session (FR-22b).
+  let liveConfig = deps.config;
+
   const confirm = async (req: ApprovalRequest): Promise<boolean> => {
     process.stdout.write(formatApproval(req, p));
-    const answer = await askLine(`${p.bold("Apply?")} [y/N] `);
-    return isAffirmative(answer);
+    if (req.action !== "shell") {
+      const answer = await askLine(`${p.bold("Apply?")} [y/N] `);
+      return isAffirmative(answer);
+    }
+    const answer = await askLine(
+      `${p.bold("Apply?")} [y/N/a] ${p.dim("(a = yes, and always allow this command)")} `,
+    );
+    const parsed = parseApprovalAnswer(answer);
+    if (parsed !== "always") return parsed === "yes";
+    const pattern = commandToAllowPattern(req.preview);
+    liveConfig = withShellAllowPattern(liveConfig, pattern);
+    try {
+      saveShellAllowPattern(deps.cwd, pattern);
+      process.stdout.write(p.dim(`(allowlisted in cody.config.json: ${pattern})\n`));
+    } catch (err) {
+      process.stdout.write(
+        `${p.yellow("warning:")} could not update cody.config.json ` +
+          `(${(err as Error).message}) — allowed for this session only\n`,
+      );
+    }
+    return true;
   };
 
-  const tools = createTools({ workdir: deps.cwd, config: deps.config, confirm });
+  const tools = createTools({
+    workdir: deps.cwd,
+    get config() {
+      return liveConfig;
+    },
+    confirm,
+  });
   const agent = createAgent({ model, tools, checkpointer: new MemorySaver() });
 
   let threadId = "repl-0";

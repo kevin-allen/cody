@@ -92,8 +92,11 @@ Writes and edits show a diff before asking; shell commands show the exact
 command. A shell **denylist** blocks matching commands in *every* mode,
 including `auto`. A shell **allowlist** auto-approves matching commands that
 would otherwise ask (handy for `git status`, test runs, …) — the denylist
-still wins over it, and it never overrides `readonly`. All file access is
-confined to the working directory.
+still wins over it, and it never overrides `readonly`. At a shell approval
+prompt (`[y/N/a]`), answer `a` to approve **and** allowlist exactly that
+command in `cody.config.json`, effective immediately — so the list grows from
+real usage instead of hand-edited regexes. All file access is confined to the
+working directory.
 
 Use `auto` only in a sandbox you trust (e.g. a container) — cody does no
 OS-level isolation itself.

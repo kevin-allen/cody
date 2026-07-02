@@ -1,5 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { resolveConfig, modelDefForRole, DEFAULT_CONFIG } from "./config.js";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  resolveConfig,
+  modelDefForRole,
+  DEFAULT_CONFIG,
+  ConfigError,
+  commandToAllowPattern,
+  withShellAllowPattern,
+  saveShellAllowPattern,
+} from "./config.js";
 
 describe("resolveConfig", () => {
   it("returns the defaults with no inputs", () => {
@@ -90,5 +101,69 @@ describe("modelDefForRole", () => {
     const c = resolveConfig({ env: { CODY_AGENT_MODEL: "typo" } });
     expect(c.models.default).toBeDefined(); // default exists...
     expect(() => modelDefForRole(c, "agent")).toThrow(/not in the catalog/); // ...but we still error
+  });
+});
+
+describe("shell allowlist helpers (FR-22b)", () => {
+  it("commandToAllowPattern anchors and escapes regex metacharacters", () => {
+    const pattern = commandToAllowPattern("pnpm test -- --grep 'a.b (c)'");
+    expect(pattern).toBe("^pnpm test -- --grep 'a\\.b \\(c\\)'$");
+    const re = new RegExp(pattern);
+    expect(re.test("pnpm test -- --grep 'a.b (c)'")).toBe(true);
+    expect(re.test("pnpm test -- --grep 'aXb (c)'")).toBe(false);
+    expect(re.test("pnpm test -- --grep 'a.b (c)' && rm -rf ~")).toBe(false);
+  });
+
+  it("withShellAllowPattern appends without mutating, and dedupes", () => {
+    const base = resolveConfig();
+    const c1 = withShellAllowPattern(base, "^echo hi$");
+    expect(c1.permissions.shell.allow).toEqual(["^echo hi$"]);
+    expect(base.permissions.shell.allow).toEqual([]); // original untouched
+    expect(withShellAllowPattern(c1, "^echo hi$")).toBe(c1); // duplicate -> same config
+  });
+
+  it("saveShellAllowPattern creates cody.config.json when absent", () => {
+    const wd = mkdtempSync(join(tmpdir(), "cody-cfg-"));
+    try {
+      saveShellAllowPattern(wd, "^echo hi$");
+      const raw = JSON.parse(readFileSync(join(wd, "cody.config.json"), "utf8"));
+      expect(raw.permissions.shell.allow).toEqual(["^echo hi$"]);
+    } finally {
+      rmSync(wd, { recursive: true, force: true });
+    }
+  });
+
+  it("saveShellAllowPattern appends, dedupes, and preserves other config fields", () => {
+    const wd = mkdtempSync(join(tmpdir(), "cody-cfg-"));
+    try {
+      const path = join(wd, "cody.config.json");
+      writeFileSync(
+        path,
+        JSON.stringify({
+          models: { default: { provider: "ollama", model: "qwen3" } },
+          permissions: { mode: "supervised", shell: { deny: ["x"], allow: ["^ls$"] } },
+        }),
+      );
+      saveShellAllowPattern(wd, "^echo hi$");
+      saveShellAllowPattern(wd, "^echo hi$"); // duplicate is a no-op
+      const raw = JSON.parse(readFileSync(path, "utf8"));
+      expect(raw.permissions.shell.allow).toEqual(["^ls$", "^echo hi$"]);
+      expect(raw.permissions.shell.deny).toEqual(["x"]); // untouched
+      expect(raw.models.default.model).toBe("qwen3"); // untouched
+    } finally {
+      rmSync(wd, { recursive: true, force: true });
+    }
+  });
+
+  it("saveShellAllowPattern throws on unparseable JSON instead of clobbering", () => {
+    const wd = mkdtempSync(join(tmpdir(), "cody-cfg-"));
+    try {
+      const path = join(wd, "cody.config.json");
+      writeFileSync(path, "{ not json");
+      expect(() => saveShellAllowPattern(wd, "^echo hi$")).toThrow(ConfigError);
+      expect(readFileSync(path, "utf8")).toBe("{ not json"); // file untouched
+    } finally {
+      rmSync(wd, { recursive: true, force: true });
+    }
   });
 });

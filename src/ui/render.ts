@@ -45,6 +45,18 @@ export function isAffirmative(answer: string): boolean {
   return /^y(es)?$/i.test(answer.trim());
 }
 
+export type ApprovalAnswer = "yes" | "no" | "always";
+
+/**
+ * Interpret a shell-approval answer (FR-22b): y/yes approves once, a/always
+ * approves and allowlists the command; anything else declines.
+ */
+export function parseApprovalAnswer(answer: string): ApprovalAnswer {
+  if (isAffirmative(answer)) return "yes";
+  if (/^a(lways)?$/i.test(answer.trim())) return "always";
+  return "no";
+}
+
 /** Color a unified diff line-by-line. */
 export function formatDiff(diff: string, p: Palette): string {
   return diff

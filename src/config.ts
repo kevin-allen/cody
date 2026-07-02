@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 export type ProviderName = "openai" | "anthropic" | "ollama";
@@ -188,6 +188,50 @@ export function loadConfigFile(cwd: string): DeepPartial<Config> | undefined {
   } catch (err) {
     throw new ConfigError(`Failed to parse ${CONFIG_FILENAME}: ${(err as Error).message}`);
   }
+}
+
+/** Turn a literal shell command into an anchored, regex-escaped allowlist pattern. */
+export function commandToAllowPattern(command: string): string {
+  return `^${command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`;
+}
+
+/** A copy of the config with the pattern appended to the shell allowlist (no duplicates). */
+export function withShellAllowPattern(config: Config, pattern: string): Config {
+  const { allow } = config.permissions.shell;
+  if (allow.includes(pattern)) return config;
+  return {
+    ...config,
+    permissions: {
+      ...config.permissions,
+      shell: { ...config.permissions.shell, allow: [...allow, pattern] },
+    },
+  };
+}
+
+/**
+ * Append a pattern to `permissions.shell.allow` in cody.config.json (FR-22b),
+ * creating the file if absent and preserving everything else in it. Throws
+ * ConfigError on unparseable JSON rather than clobbering the file.
+ */
+export function saveShellAllowPattern(cwd: string, pattern: string): void {
+  const path = resolve(cwd, CONFIG_FILENAME);
+  let text: string | undefined;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    text = undefined; // no config file yet -> start one
+  }
+  let raw: Record<string, unknown>;
+  try {
+    raw = text === undefined ? {} : (JSON.parse(text) as Record<string, unknown>);
+  } catch (err) {
+    throw new ConfigError(`Failed to parse ${CONFIG_FILENAME}: ${(err as Error).message}`);
+  }
+  const permissions = (raw.permissions ??= {}) as Record<string, unknown>;
+  const shell = (permissions.shell ??= {}) as Record<string, unknown>;
+  const allow: unknown[] = Array.isArray(shell.allow) ? shell.allow : (shell.allow = []);
+  if (!allow.includes(pattern)) allow.push(pattern);
+  writeFileSync(path, `${JSON.stringify(raw, null, 2)}\n`);
 }
 
 export interface LoadInputs {
