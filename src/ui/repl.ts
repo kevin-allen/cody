@@ -11,7 +11,7 @@ import {
 import { getModel, assertToolCapable } from "../providers/factory.js";
 import { createTools } from "../tools/index.js";
 import type { ApprovalRequest, ConfirmResult } from "../tools/index.js";
-import { createAgent, streamAgentText, repairDanglingToolCalls } from "../agent/graph.js";
+import { createAgent, streamAgentEvents, repairDanglingToolCalls } from "../agent/graph.js";
 import type { UsageTotals } from "../agent/graph.js";
 import {
   makePalette,
@@ -190,7 +190,8 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     currentAbort = new AbortController();
     try {
       let turnUsage: UsageTotals | undefined;
-      for await (const chunk of streamAgentText(agent, input, {
+      let atLineStart = true;
+      for await (const event of streamAgentEvents(agent, input, {
         threadId,
         signal: currentAbort.signal,
         recursionLimit: deps.config.limits.recursionLimit,
@@ -200,9 +201,18 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
           turnUsage = usage;
         },
       })) {
-        process.stdout.write(chunk);
+        if (event.kind === "text") {
+          process.stdout.write(event.text);
+          atLineStart = event.text.endsWith("\n");
+        } else {
+          // One dim line per completed tool run (FR-25), on its own line.
+          if (!atLineStart) process.stdout.write("\n");
+          const marker = event.status === "ok" ? "" : ` ${p.yellow(`[${event.status}]`)}`;
+          process.stdout.write(`${p.dim(`→ ${event.name} ${event.input}`)}${marker}\n`);
+          atLineStart = true;
+        }
       }
-      process.stdout.write("\n");
+      if (!atLineStart) process.stdout.write("\n");
       // Print after the turn's trailing newline so the summary gets its own line.
       if (turnUsage && turnUsage.inputTokens + turnUsage.outputTokens > 0) {
         const sessionTotal = sessionInputTokens + sessionOutputTokens;

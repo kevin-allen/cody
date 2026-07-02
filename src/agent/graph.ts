@@ -85,15 +85,47 @@ export async function runAgentOnce(agent: Agent, userText: string): Promise<stri
   return typeof content === "string" ? content : JSON.stringify(content);
 }
 
+/** Outcome of a tool run, derived from the gate's result markers. */
+export type ToolEventStatus = "ok" | "denied" | "blocked" | "error";
+
+export type AgentEvent =
+  | { readonly kind: "text"; readonly text: string }
+  | {
+      readonly kind: "tool";
+      readonly name: string;
+      /** Compact JSON of the tool arguments (truncated for display). */
+      readonly input: string;
+      readonly status: ToolEventStatus;
+    };
+
+function compactArgs(args: unknown, max = 80): string {
+  let s: string;
+  try {
+    s = typeof args === "string" ? args : (JSON.stringify(args) ?? "");
+  } catch {
+    s = "";
+  }
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+function statusOf(result: unknown): ToolEventStatus {
+  if (typeof result !== "string") return "ok";
+  if (result.startsWith("[denied")) return "denied";
+  if (result.startsWith("[blocked")) return "blocked";
+  if (result.startsWith("[error")) return "error";
+  return "ok";
+}
+
 /**
- * Stream the assistant's text as it is produced (FR-4). Yields only AI text
- * chunks — tool calls and tool results are not surfaced here.
+ * Stream the turn as typed events (FR-4, FR-25): assistant text as it is
+ * produced, plus one "tool" event per completed tool run so the UI can show
+ * what the agent is doing between text chunks.
  */
-export async function* streamAgentText(
+export async function* streamAgentEvents(
   agent: Agent,
   userText: string,
   opts: StreamOptions = {},
-): AsyncGenerator<string> {
+): AsyncGenerator<AgentEvent> {
   const stream = await agent.stream(
     { messages: [new HumanMessage(userText)] },
     {
@@ -105,6 +137,10 @@ export async function* streamAgentText(
   );
   let inputTokens = 0;
   let outputTokens = 0;
+  // Tool arguments arrive on AI chunks (whole, or streamed piecewise); the
+  // matching result arrives later as a ToolMessage — correlate by call id.
+  const argsByCallId = new Map<string, string>();
+  const partialByIndex = new Map<number, { id?: string; args: string }>();
 
   for await (const chunk of stream) {
     const msg = Array.isArray(chunk) ? chunk[0] : chunk;
@@ -119,13 +155,61 @@ export async function* streamAgentText(
         inputTokens += usage.input_tokens ?? 0;
         outputTokens += usage.output_tokens ?? 0;
       }
+      const calls = (msg as { tool_calls?: { id?: string; args?: unknown }[] }).tool_calls ?? [];
+      for (const call of calls) {
+        if (!call.id) continue;
+        // Streamed chunks re-parse the args as they accumulate ({} at first),
+        // so keep the most complete representation seen for this call id.
+        const args = compactArgs(call.args);
+        const known = argsByCallId.get(call.id) ?? "";
+        if (args.length > known.length) argsByCallId.set(call.id, args);
+      }
+      const partials =
+        (msg as { tool_call_chunks?: { id?: string; args?: string; index?: number }[] })
+          .tool_call_chunks ?? [];
+      for (const piece of partials) {
+        let rec = partialByIndex.get(piece.index ?? 0);
+        // A new call id at this index means a new tool call in a later round —
+        // start fresh instead of appending to the previous call's args.
+        if (!rec || (piece.id && piece.id !== rec.id)) {
+          rec = { id: piece.id, args: "" };
+          partialByIndex.set(piece.index ?? 0, rec);
+        }
+        rec.args += piece.args ?? "";
+      }
     }
     if (type === "ai" && typeof content === "string" && content.length > 0) {
-      yield content;
+      yield { kind: "text", text: content };
+    }
+    if (type === "tool") {
+      const { name, tool_call_id } = msg as { name?: string; tool_call_id?: string };
+      let input = (tool_call_id && argsByCallId.get(tool_call_id)) || "";
+      if (tool_call_id) {
+        const partial = [...partialByIndex.values()].find((r) => r.id === tool_call_id);
+        if (partial) {
+          const accumulated = compactArgs(partial.args);
+          if (accumulated.length > input.length) input = accumulated;
+        }
+      }
+      yield { kind: "tool", name: name ?? "tool", input, status: statusOf(content) };
     }
   }
 
   if (opts.onUsage) {
     opts.onUsage({ inputTokens, outputTokens });
+  }
+}
+
+/**
+ * Stream only the assistant's text (FR-4) — a thin filter over
+ * streamAgentEvents for text-only consumers like headless `cody run`.
+ */
+export async function* streamAgentText(
+  agent: Agent,
+  userText: string,
+  opts: StreamOptions = {},
+): AsyncGenerator<string> {
+  for await (const event of streamAgentEvents(agent, userText, opts)) {
+    if (event.kind === "text") yield event.text;
   }
 }

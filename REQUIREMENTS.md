@@ -208,7 +208,10 @@ invasive.
 - FR-24: cody launches into an interactive REPL: the user types a request, cody
   responds (streaming), possibly invoking tools with approval prompts, and
   loops.
-- FR-25: Clear visual distinction between assistant text, tool calls, tool
+- FR-25: Tool activity is visible as it happens: each completed tool run is
+  echoed as a dim `→ tool args` line (with a `[denied]`/`[blocked]`/`[error]`
+  marker when it failed), so a working agent is distinguishable from a hung
+  one. Clear visual distinction between assistant text, tool calls, tool
   results, and approval prompts.
 - FR-26: Commands: `/exit` (quit), `/clear` (reset conversation), `/help`
   (list commands). More can be added later.

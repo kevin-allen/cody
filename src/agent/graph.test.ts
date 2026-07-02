@@ -12,7 +12,8 @@ import { createTools } from "../tools/index.js";
 import type { ToolContext } from "../tools/index.js";
 import { MemorySaver } from "@langchain/langgraph";
 import { HumanMessage } from "@langchain/core/messages";
-import { createAgent, runAgentOnce, repairDanglingToolCalls } from "./graph.js";
+import { createAgent, runAgentOnce, streamAgentEvents, repairDanglingToolCalls } from "./graph.js";
+import type { AgentEvent } from "./graph.js";
 
 /**
  * A minimal chat model that returns a scripted sequence of AI messages,
@@ -83,6 +84,49 @@ describe("agent ReAct loop", () => {
 
     expect(existsSync(join(wd, "out.txt"))).toBe(false); // gate denied the write
     expect(result).toContain("could not");
+  });
+});
+
+describe("streamAgentEvents", () => {
+  async function collect(events: AsyncGenerator<AgentEvent>): Promise<AgentEvent[]> {
+    const out: AgentEvent[] = [];
+    for await (const e of events) out.push(e);
+    return out;
+  }
+
+  it("emits a tool event (name, args, ok) for an executed tool, then the text", async () => {
+    const model = new ScriptedToolModel([
+      new AIMessage({
+        content: "",
+        tool_calls: [{ id: "c1", name: "write_file", args: { path: "out.txt", content: "hi" } }],
+      }),
+      new AIMessage({ content: "Done." }),
+    ]);
+    const agent = createAgent({ model, tools: createTools(ctx("auto")) });
+
+    const events = await collect(streamAgentEvents(agent, "create out.txt"));
+
+    const tool = events.find((e) => e.kind === "tool");
+    expect(tool).toMatchObject({ name: "write_file", status: "ok" });
+    expect(tool?.kind === "tool" && tool.input).toContain("out.txt");
+    const text = events.filter((e) => e.kind === "text");
+    expect(text.map((e) => (e.kind === "text" ? e.text : "")).join("")).toContain("Done");
+  });
+
+  it("marks a gate-denied tool run with status denied", async () => {
+    const model = new ScriptedToolModel([
+      new AIMessage({
+        content: "",
+        tool_calls: [{ id: "c1", name: "write_file", args: { path: "out.txt", content: "hi" } }],
+      }),
+      new AIMessage({ content: "Could not write." }),
+    ]);
+    const agent = createAgent({ model, tools: createTools(ctx("readonly")) });
+
+    const events = await collect(streamAgentEvents(agent, "create out.txt"));
+
+    const tool = events.find((e) => e.kind === "tool");
+    expect(tool).toMatchObject({ name: "write_file", status: "denied" });
   });
 });
 
