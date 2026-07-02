@@ -57,7 +57,26 @@ export async function connectMcpServers(config: import("../config.js").Config): 
       .map((n) => n.split("__").slice(1).join("__"));
 
     // attempt to get a description: prefer config.description, else try the adapter client
-    const description: string | undefined = (cfg as { description?: string }).description;
+    let description: string | undefined = (cfg as { description?: string }).description;
+
+    // If no description provided in config, try to obtain initialize instructions from the MCP server client
+    if (!description) {
+      try {
+        // getClient may return an SDK Client that exposes getInstructions()
+        const sdkClient = await (client as unknown as { getClient: (serverName: string, options?: unknown) => Promise<unknown> }).getClient(name).catch(() => undefined);
+        if (sdkClient) {
+          const maybeGetInstructions = (sdkClient as { getInstructions?: unknown }).getInstructions;
+          if (typeof maybeGetInstructions === "function") {
+            const inst = maybeGetInstructions.call(sdkClient);
+            // getInstructions might return a Promise or a string
+            const instructions = inst instanceof Promise ? await inst : inst;
+            if (typeof instructions === "string" && instructions.trim().length > 0) description = instructions;
+          }
+        }
+      } catch (_e) {
+        // best-effort: ignore any errors obtaining instructions
+      }
+    }
 
     summaries.push({ name, description, toolNames });
   }

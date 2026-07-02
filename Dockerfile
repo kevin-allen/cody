@@ -3,6 +3,8 @@
 # --- build stage: install all deps and compile TypeScript ---
 FROM node:20-slim AS build
 WORKDIR /app
+# better-sqlite3 is a native module; node-gyp needs a toolchain when no prebuild matches
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
 RUN corepack enable
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
