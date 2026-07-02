@@ -21,6 +21,7 @@ export interface McpServerConfig {
   readonly headers?: Record<string, string>;
   readonly insecureTls?: boolean;
   readonly tools?: string[];
+  readonly description?: string;
 }
 
 export interface PermissionsConfig {

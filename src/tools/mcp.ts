@@ -3,7 +3,9 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import type { ToolContext } from "./index.js";
 import { isMcpDenied, isMcpAllowed } from "./permissions.js";
 
-export async function connectMcpServers(config: import("../config.js").Config): Promise<{ rawTools: StructuredToolInterface[]; close: () => Promise<void> } | undefined> {
+export interface McpServerSummary { name: string; description?: string; toolNames: string[] }
+
+export async function connectMcpServers(config: import("../config.js").Config): Promise<{ rawTools: StructuredToolInterface[]; summaries: McpServerSummary[]; close: () => Promise<void> } | undefined> {
   const entries = Object.entries(config.mcp.servers ?? {});
   if (entries.length === 0) return undefined;
 
@@ -43,8 +45,26 @@ export async function connectMcpServers(config: import("../config.js").Config): 
     return serverCfg.tools.includes(toolName);
   });
 
+  // Build summaries per configured server
+  const summaries: McpServerSummary[] = [];
+  const servers = config.mcp.servers as Record<string, import("../config.js").McpServerConfig> | undefined;
+  for (const [name, def] of Object.entries(servers ?? {})) {
+    const cfg = def as import("../config.js").McpServerConfig;
+    // gather tool names for this server from the filtered list (unprefixed)
+    const toolNames: string[] = filtered
+      .map((t) => t.name)
+      .filter((n) => n.startsWith(name + "__"))
+      .map((n) => n.split("__").slice(1).join("__"));
+
+    // attempt to get a description: prefer config.description, else try the adapter client
+    const description: string | undefined = (cfg as { description?: string }).description;
+
+    summaries.push({ name, description, toolNames });
+  }
+
   return {
     rawTools: filtered,
+    summaries,
     close: async () => {
       await client.close();
     },

@@ -105,6 +105,7 @@ export interface ReplDeps {
   readonly store?: SessionStore;
   readonly resumeTarget?: string;
   readonly rawMcpTools?: StructuredToolInterface[];
+  readonly mcpSummaries?: import("../tools/mcp.js").McpServerSummary[];
 }
 
 /** Start the interactive REPL (FR-24..FR-27, FR-34..FR-37). */
@@ -226,10 +227,14 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     ...(deps.rawMcpTools ? createGatedMcpTools(ctx as unknown as import("../tools/index.js").ToolContext, deps.rawMcpTools) : []),
   ];
 
+  // Build the agent prompt possibly augmented with MCP server summaries
+  const promptModule = await import("../agent/prompt.js");
+  const systemPrompt = promptModule.withMcpServers(promptModule.SYSTEM_PROMPT, deps.mcpSummaries ?? []);
+
   const store = deps.store;
   const saver = store ? store.saver : new MemorySaver();
 
-  const agent = createAgent({ model, tools, checkpointer: saver });
+  const agent = createAgent({ model, tools, checkpointer: saver, systemPrompt });
 
   let sessionId: string | undefined;
   // undefined = sessions not used; null = awaiting first input; string = already set to first input consumed? We'll store first input value separately.

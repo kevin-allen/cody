@@ -126,7 +126,8 @@ export function createTools(ctx: ToolContext): StructuredToolInterface[] {
     ({ pattern, path }) =>
       gate(ctx, { action: "read", title: `Grep /${pattern}/`, preview: pattern }, () => {
         try {
-          return grepWithin(ctx.workdir, pattern, path);
+          const sub = typeof path === "string" && path.trim().length > 0 ? path : undefined;
+          return grepWithin(ctx.workdir, pattern, sub);
         } catch (e) {
           return friendlyError(e);
         }

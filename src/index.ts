@@ -90,9 +90,9 @@ async function main(): Promise<void> {
     } catch {
       /* ignore */
     }
-    let mcpForRun: { rawTools: import("@langchain/core/tools").StructuredToolInterface[]; close: () => Promise<void> } | undefined;
+      let mcpForRun: { rawTools: import("@langchain/core/tools").StructuredToolInterface[]; summaries: import("./tools/mcp.js").McpServerSummary[]; close: () => Promise<void> } | undefined;
     try {
-      mcpForRun = await connectMcpServers(config);
+      mcpForRun = await connectMcpServers(config) as unknown as typeof mcpForRun;
     } catch (err) {
       process.stderr.write(`warning: failed to connect to MCP servers: ${(err as Error).message}\n`);
     }
@@ -104,7 +104,9 @@ async function main(): Promise<void> {
     ];
 
     try {
-      const agent = createAgent({ model, tools });
+      const promptModule = await import("./agent/prompt.js");
+      const systemPrompt = promptModule.withMcpServers(promptModule.SYSTEM_PROMPT, mcpForRun?.summaries ?? []);
+      const agent = createAgent({ model, tools, systemPrompt });
       for await (const chunk of streamAgentText(agent, task, {
         recursionLimit: config.limits.recursionLimit,
       }))
@@ -276,15 +278,15 @@ async function main(): Promise<void> {
     // ignore
   }
 
-  let mcp: { rawTools: import("@langchain/core/tools").StructuredToolInterface[]; close: () => Promise<void> } | undefined;
+  let mcp: { rawTools: import("@langchain/core/tools").StructuredToolInterface[]; summaries?: import("./tools/mcp.js").McpServerSummary[]; close: () => Promise<void> } | undefined;
   try {
-    mcp = await connectMcpServers(config);
+    mcp = await connectMcpServers(config) as unknown as typeof mcp;
   } catch (err) {
     process.stderr.write(`warning: failed to connect to MCP servers: ${(err as Error).message}\n`);
   }
 
   // No recognized subcommand -> start the interactive REPL.
-  const replPromise = startRepl({ cwd: process.cwd(), config, version: readVersion(), store, resumeTarget, rawMcpTools: mcp?.rawTools });
+  const replPromise = startRepl({ cwd: process.cwd(), config, version: readVersion(), store, resumeTarget, rawMcpTools: mcp?.rawTools, mcpSummaries: mcp?.summaries });
   await replPromise.finally(async () => {
     if (store) store.close();
     if (mcp) await mcp.close();
