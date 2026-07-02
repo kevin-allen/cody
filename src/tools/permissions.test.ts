@@ -1,12 +1,12 @@
 import { describe, it, expect } from "vitest";
 import type { PermissionsConfig } from "../config.js";
-import { resolvePolicy, isShellDenied } from "./permissions.js";
+import { resolvePolicy, isShellDenied, isShellAllowed } from "./permissions.js";
 
 function perms(over: Partial<PermissionsConfig> = {}): PermissionsConfig {
   return {
     mode: "supervised",
     overrides: {},
-    shell: { deny: ["rm\\s+-rf\\s+/", "git\\s+push"] },
+    shell: { deny: ["rm\\s+-rf\\s+/", "git\\s+push"], allow: [] },
     ...over,
   };
 }
@@ -52,7 +52,26 @@ describe("isShellDenied", () => {
   });
 
   it("ignores an invalid regex pattern instead of throwing", () => {
-    const p = perms({ shell: { deny: ["([unclosed"] } });
+    const p = perms({ shell: { deny: ["([unclosed"], allow: [] } });
     expect(isShellDenied(p, "anything")).toBe(false);
+  });
+});
+
+describe("isShellAllowed", () => {
+  it("matches an allowlisted command", () => {
+    const p = perms({ shell: { deny: [], allow: ["^git\\s+status", "^pnpm\\s+test"] } });
+    expect(isShellAllowed(p, "git status")).toBe(true);
+    expect(isShellAllowed(p, "pnpm test -- --watch=false")).toBe(true);
+  });
+
+  it("does not match other commands, and the default allowlist is empty", () => {
+    const p = perms({ shell: { deny: [], allow: ["^git\\s+status"] } });
+    expect(isShellAllowed(p, "git push origin main")).toBe(false);
+    expect(isShellAllowed(perms(), "git status")).toBe(false);
+  });
+
+  it("ignores an invalid regex pattern instead of throwing", () => {
+    const p = perms({ shell: { deny: [], allow: ["([unclosed"] } });
+    expect(isShellAllowed(p, "anything")).toBe(false);
   });
 });

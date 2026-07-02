@@ -12,17 +12,30 @@ export function resolvePolicy(permissions: PermissionsConfig, action: ToolAction
   return permissions.overrides[action] ?? PRESETS[permissions.mode][action];
 }
 
-/**
- * Whether a shell command matches the denylist. Applies in EVERY mode,
- * including `auto` — a denylist match always wins over the policy (FR-22).
- * Invalid regex patterns are ignored rather than throwing.
- */
-export function isShellDenied(permissions: PermissionsConfig, command: string): boolean {
-  return permissions.shell.deny.some((pattern) => {
+/** Whether a command matches any pattern. Invalid regexes are ignored rather than throwing. */
+function matchesAny(patterns: readonly string[], command: string): boolean {
+  return patterns.some((pattern) => {
     try {
       return new RegExp(pattern).test(command);
     } catch {
       return false;
     }
   });
+}
+
+/**
+ * Whether a shell command matches the denylist. Applies in EVERY mode,
+ * including `auto` — a denylist match always wins over the policy (FR-22).
+ */
+export function isShellDenied(permissions: PermissionsConfig, command: string): boolean {
+  return matchesAny(permissions.shell.deny, command);
+}
+
+/**
+ * Whether a shell command matches the allowlist. An allowlisted command skips
+ * the `ask` prompt (FR-22a) — but the denylist still wins over it, and it never
+ * upgrades a `deny` policy (e.g. `readonly` mode).
+ */
+export function isShellAllowed(permissions: PermissionsConfig, command: string): boolean {
+  return matchesAny(permissions.shell.allow, command);
 }

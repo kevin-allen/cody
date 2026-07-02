@@ -2,7 +2,7 @@ import { tool } from "@langchain/core/tools";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 import type { Config, ToolAction } from "../config.js";
-import { resolvePolicy, isShellDenied } from "./permissions.js";
+import { resolvePolicy, isShellDenied, isShellAllowed } from "./permissions.js";
 import {
   readFileWithin,
   listDirWithin,
@@ -13,13 +13,15 @@ import {
 } from "./fs.js";
 import { runShell } from "./shell.js";
 
-export { resolvePolicy, isShellDenied } from "./permissions.js";
+export { resolvePolicy, isShellDenied, isShellAllowed } from "./permissions.js";
 
 export interface ApprovalRequest {
   readonly action: ToolAction;
   readonly title: string;
   /** Command text (shell) or unified diff (write/edit) shown to the user. */
   readonly preview: string;
+  /** Pre-approved (e.g. by the shell allowlist): skips the `ask` prompt, never overrides `deny`. */
+  readonly preapproved?: boolean;
 }
 
 export interface ToolContext {
@@ -50,7 +52,7 @@ export async function gate(
   if (policy === "deny") {
     return `[denied] "${req.action}" is not allowed in "${ctx.config.permissions.mode}" mode.`;
   }
-  if (policy === "ask" && !(await ctx.confirm(req))) {
+  if (policy === "ask" && !req.preapproved && !(await ctx.confirm(req))) {
     return "[denied by user]";
   }
   return exec();
@@ -188,8 +190,15 @@ export function createTools(ctx: ToolContext): StructuredToolInterface[] {
           `[blocked] command matches a denylist pattern and is refused: ${command}`,
         );
       }
-      return gate(ctx, { action: "shell", title: "Run command", preview: command }, () =>
-        runShell(ctx.workdir, command),
+      return gate(
+        ctx,
+        {
+          action: "shell",
+          title: "Run command",
+          preview: command,
+          preapproved: isShellAllowed(ctx.config.permissions, command),
+        },
+        () => runShell(ctx.workdir, command),
       );
     },
     {

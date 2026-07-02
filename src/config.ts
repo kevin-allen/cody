@@ -19,7 +19,7 @@ export type ActionPolicy = "allow" | "ask" | "deny";
 export interface PermissionsConfig {
   readonly mode: PermissionMode;
   readonly overrides: Partial<Record<ToolAction, ActionPolicy>>;
-  readonly shell: { readonly deny: readonly string[] };
+  readonly shell: { readonly deny: readonly string[]; readonly allow: readonly string[] };
 }
 
 export interface Config {
@@ -38,7 +38,7 @@ export const DEFAULT_CONFIG: Config = {
   permissions: {
     mode: "supervised",
     overrides: {},
-    shell: { deny: ["rm\\s+-rf\\s+/", "git\\s+push", ":\\(\\)\\s*\\{"] },
+    shell: { deny: ["rm\\s+-rf\\s+/", "git\\s+push", ":\\(\\)\\s*\\{"], allow: [] },
   },
 };
 
@@ -82,7 +82,10 @@ export function resolveConfig(inputs: ResolveInputs = {}): Config {
   let permissions: PermissionsConfig = {
     mode: coerceMode(filePerms.mode) ?? DEFAULT_CONFIG.permissions.mode,
     overrides: { ...DEFAULT_CONFIG.permissions.overrides, ...(filePerms.overrides ?? {}) },
-    shell: { deny: filePerms.shell?.deny ?? DEFAULT_CONFIG.permissions.shell.deny },
+    shell: {
+      deny: filePerms.shell?.deny ?? DEFAULT_CONFIG.permissions.shell.deny,
+      allow: filePerms.shell?.allow ?? DEFAULT_CONFIG.permissions.shell.allow,
+    },
   };
 
   // --- environment overrides ---

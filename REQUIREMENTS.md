@@ -181,6 +181,10 @@ unsupervised use.
     of mode.
   - An optional shell **denylist** (regex patterns) blocks matching commands
     even under `allow` / `auto`; a denylist match always wins over the policy.
+- FR-22a (shell allowlist): an optional shell **allowlist** (regex patterns)
+  auto-approves matching commands that would otherwise `ask` (e.g. `^git\s+status`
+  in `supervised` mode). It only skips the prompt: the denylist still wins over
+  it, and it never upgrades a `deny` policy (so `readonly` stays readonly).
 - FR-23 (explicit + visible): `auto` mode must be enabled **explicitly** (via
   `permissions.mode: "auto"`, or `--auto` / `CODY_MODE=auto`) — it is never the
   default. On startup cody prints a banner stating the active mode, so an
@@ -248,8 +252,9 @@ invasive.
     "permissions": {
       "mode": "supervised",     // supervised (default) | auto | readonly
       "overrides": {},          // optional: read|write|edit|shell -> allow|ask|deny
-      "shell": {                // optional denylist — applies in every mode
-        "deny": ["rm\\s+-rf\\s+/", "git\\s+push", ":\\(\\)\\s*\\{"]
+      "shell": {
+        "deny": ["rm\\s+-rf\\s+/", "git\\s+push", ":\\(\\)\\s*\\{"], // blocks in every mode
+        "allow": ["^git\\s+status", "^pnpm\\s+test"] // optional: skips the ask prompt
       }
     }
   }

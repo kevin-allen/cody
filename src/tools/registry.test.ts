@@ -77,6 +77,53 @@ describe("permission gate through the tools", () => {
     expect(res).toContain("[blocked]");
   });
 
+  it("supervised: an allowlisted shell command runs without asking", async () => {
+    const { map, confirm } = tools(
+      resolveConfig({
+        fileConfig: { permissions: { shell: { deny: [], allow: ["^echo\\s"] } } },
+      }),
+      vi.fn(async () => false),
+    );
+    const res = await map.run_shell!.invoke({ command: "echo hi" });
+    expect(confirm).not.toHaveBeenCalled();
+    expect(res).toContain("hi");
+  });
+
+  it("supervised: a non-allowlisted shell command still asks", async () => {
+    const { map, confirm } = tools(
+      resolveConfig({
+        fileConfig: { permissions: { shell: { deny: [], allow: ["^echo\\s"] } } },
+      }),
+      vi.fn(async () => false),
+    );
+    const res = await map.run_shell!.invoke({ command: "printf hi" });
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(res).toContain("denied by user");
+  });
+
+  it("denylist wins over allowlist", async () => {
+    const { map, confirm } = tools(
+      resolveConfig({
+        fileConfig: { permissions: { shell: { deny: ["^echo\\s"], allow: ["^echo\\s"] } } },
+      }),
+    );
+    const res = await map.run_shell!.invoke({ command: "echo hi" });
+    expect(confirm).not.toHaveBeenCalled();
+    expect(res).toContain("[blocked]");
+  });
+
+  it("readonly: an allowlisted shell command is still denied", async () => {
+    const { map, confirm } = tools(
+      resolveConfig({
+        fileConfig: { permissions: { shell: { deny: [], allow: ["^echo\\s"] } } },
+        env: { CODY_MODE: "readonly" },
+      }),
+    );
+    const res = await map.run_shell!.invoke({ command: "echo hi" });
+    expect(confirm).not.toHaveBeenCalled();
+    expect(res).toContain("[denied]");
+  });
+
   it("a path escape returns an error result, not a throw", async () => {
     const { map } = tools(resolveConfig());
     const res = await map.read_file!.invoke({ path: "../../etc/passwd" });

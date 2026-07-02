@@ -64,7 +64,10 @@ defaults → `cody.config.json` in the working directory → environment variabl
   "permissions": {
     "mode": "supervised", // supervised (default) | auto | readonly
     "overrides": {}, // read|write|edit|shell -> allow|ask|deny
-    "shell": { "deny": ["rm\\s+-rf\\s+/", "git\\s+push"] }
+    "shell": {
+      "deny": ["rm\\s+-rf\\s+/", "git\\s+push"], // blocked in every mode
+      "allow": ["^git\\s+status", "^pnpm\\s+test"] // auto-approved (skips the ask)
+    }
   }
 }
 ```
@@ -87,7 +90,10 @@ defaults → `cody.config.json` in the working directory → environment variabl
 
 Writes and edits show a diff before asking; shell commands show the exact
 command. A shell **denylist** blocks matching commands in *every* mode,
-including `auto`. All file access is confined to the working directory.
+including `auto`. A shell **allowlist** auto-approves matching commands that
+would otherwise ask (handy for `git status`, test runs, …) — the denylist
+still wins over it, and it never overrides `readonly`. All file access is
+confined to the working directory.
 
 Use `auto` only in a sandbox you trust (e.g. a container) — cody does no
 OS-level isolation itself.
