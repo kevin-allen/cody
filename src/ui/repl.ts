@@ -12,6 +12,7 @@ import { getModel, assertToolCapable } from "../providers/factory.js";
 import { createTools } from "../tools/index.js";
 import type { ApprovalRequest } from "../tools/index.js";
 import { createAgent, streamAgentText } from "../agent/graph.js";
+import type { UsageTotals } from "../agent/graph.js";
 import {
   makePalette,
   colorEnabled,
@@ -28,7 +29,7 @@ import {
   DISABLE_BRACKETED_PASTE,
 } from "./paste.js";
 
-export type SlashCommand = "exit" | "clear" | "help" | "unknown";
+export type SlashCommand = "exit" | "clear" | "help" | "usage" | "unknown";
 
 /** Parse a slash command (pure — for testing). */
 export function parseSlash(input: string): SlashCommand {
@@ -36,6 +37,7 @@ export function parseSlash(input: string): SlashCommand {
   if (cmd === "exit" || cmd === "quit") return "exit";
   if (cmd === "clear") return "clear";
   if (cmd === "help") return "help";
+  if (cmd === "usage") return "usage";
   return "unknown";
 }
 
@@ -48,6 +50,7 @@ function helpText(p: Palette): string {
   return [
     `${p.bold("/help")}   show this help`,
     `${p.bold("/clear")}  start a fresh conversation`,
+    `${p.bold("/usage")}  print token usage totals for this session`,
     `${p.bold("/exit")}   quit (or Ctrl-D; plain "exit"/"quit" won't)`,
     "",
   ]
@@ -153,6 +156,10 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
   let busy = false;
   let currentAbort: AbortController | null = null;
 
+  // session running totals for token usage
+  let sessionInputTokens = 0;
+  let sessionOutputTokens = 0;
+
   const def = modelDefForRole(deps.config, "agent");
   process.stdout.write(
     banner(p, deps.version, deps.config.permissions.mode, `${def.provider}:${def.model}`, deps.cwd),
@@ -172,13 +179,28 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     busy = true;
     currentAbort = new AbortController();
     try {
+      let turnUsage: UsageTotals | undefined;
       for await (const chunk of streamAgentText(agent, input, {
         threadId,
         signal: currentAbort.signal,
+        onUsage: (usage: UsageTotals) => {
+          sessionInputTokens += usage.inputTokens;
+          sessionOutputTokens += usage.outputTokens;
+          turnUsage = usage;
+        },
       })) {
         process.stdout.write(chunk);
       }
       process.stdout.write("\n");
+      // Print after the turn's trailing newline so the summary gets its own line.
+      if (turnUsage && turnUsage.inputTokens + turnUsage.outputTokens > 0) {
+        const sessionTotal = sessionInputTokens + sessionOutputTokens;
+        process.stdout.write(
+          p.dim(
+            `(tokens: ${turnUsage.inputTokens} in / ${turnUsage.outputTokens} out - session: ${sessionTotal} total)\n`,
+          ),
+        );
+      }
     } catch (err) {
       if (currentAbort.signal.aborted) process.stdout.write(`\n${p.dim("(cancelled)")}\n`);
       else process.stdout.write(`\n${p.red("error:")} ${(err as Error).message}\n`);
@@ -201,6 +223,15 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
         threadId = `repl-${(clears += 1)}`;
         process.stdout.write(p.dim("(conversation cleared)\n"));
         break;
+      case "usage": {
+        const sessionTotal = sessionInputTokens + sessionOutputTokens;
+        process.stdout.write(
+          p.dim(
+            `(tokens: ${sessionInputTokens} in / ${sessionOutputTokens} out - session: ${sessionTotal} total)\n`,
+          ),
+        );
+        break;
+      }
       default:
         process.stdout.write(p.dim(`unknown command: ${input} (try /help)\n`));
     }

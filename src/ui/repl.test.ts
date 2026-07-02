@@ -10,6 +10,10 @@ describe("parseSlash", () => {
     expect(parseSlash("/clear")).toBe("clear");
     expect(parseSlash("  /HELP  ")).toBe("help");
   });
+  it("recognizes /usage", () => {
+    expect(parseSlash("/usage")).toBe("usage");
+    expect(parseSlash("  /UsAge  ")).toBe("usage");
+  });
   it("returns unknown for anything else", () => {
     expect(parseSlash("/frobnicate")).toBe("unknown");
     expect(parseSlash("/")).toBe("unknown");

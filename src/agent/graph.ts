@@ -27,7 +27,14 @@ export function createAgent(deps: AgentDeps) {
   });
 }
 
+export interface UsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+}
+
 export interface StreamOptions {
+  /** Optional callback to report token usage at the end of a turn. */
+  readonly onUsage?: (usage: UsageTotals) => void;
   /** Checkpointer thread id — turns sharing an id continue one conversation. */
   readonly threadId?: string;
   /** Abort signal to cancel the turn (e.g. on Ctrl-C). */
@@ -61,12 +68,29 @@ export async function* streamAgentText(
       ...(opts.threadId ? { configurable: { thread_id: opts.threadId } } : {}),
     },
   );
+  let inputTokens = 0;
+  let outputTokens = 0;
+
   for await (const chunk of stream) {
     const msg = Array.isArray(chunk) ? chunk[0] : chunk;
     const type = (msg as { _getType?: () => string })._getType?.();
     const content = (msg as { content?: unknown }).content;
+    if (type === "ai") {
+      // usage_metadata often rides on chunks with empty text (tool-call and
+      // final chunks), so accumulate before the text check.
+      const usage = (msg as { usage_metadata?: { input_tokens?: number; output_tokens?: number } })
+        .usage_metadata;
+      if (usage) {
+        inputTokens += usage.input_tokens ?? 0;
+        outputTokens += usage.output_tokens ?? 0;
+      }
+    }
     if (type === "ai" && typeof content === "string" && content.length > 0) {
       yield content;
     }
+  }
+
+  if (opts.onUsage) {
+    opts.onUsage({ inputTokens, outputTokens });
   }
 }
