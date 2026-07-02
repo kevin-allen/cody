@@ -38,6 +38,13 @@ export interface LimitsConfig {
    * should never hit it.
    */
   readonly recursionLimit: number;
+  /**
+   * When session context input tokens for a single turn exceed this threshold,
+   * the REPL auto-compacts the session to keep context size reasonable. 0
+   * disables auto-compaction. File config may set a non-negative integer;
+   * invalid values fall back to the built-in default.
+   */
+  readonly compactThresholdTokens: number;
 }
 
 export interface SessionsConfig {
@@ -67,7 +74,7 @@ export const DEFAULT_CONFIG: Config = {
     shell: { deny: ["rm\\s+-rf\\s+/", "git\\s+push", ":\\(\\)\\s*\\{"], allow: [] },
     mcp: { deny: [], allow: [] },
   },
-  limits: { recursionLimit: 200 },
+  limits: { recursionLimit: 200, compactThresholdTokens: 150000 },
   sessions: { enabled: true },
   mcp: { servers: {} },
 };
@@ -122,12 +129,17 @@ export function resolveConfig(inputs: ResolveInputs = {}): Config {
     },
   };
 
-  const fileLimit = fileConfig.limits?.recursionLimit;
+  const fileRecursion = fileConfig.limits?.recursionLimit;
+  const fileCompact = fileConfig.limits?.compactThresholdTokens;
   const limits: LimitsConfig = {
     recursionLimit:
-      typeof fileLimit === "number" && Number.isInteger(fileLimit) && fileLimit > 0
-        ? fileLimit
+      typeof fileRecursion === "number" && Number.isInteger(fileRecursion) && fileRecursion > 0
+        ? fileRecursion
         : DEFAULT_CONFIG.limits.recursionLimit,
+    compactThresholdTokens:
+      typeof fileCompact === "number" && Number.isInteger(fileCompact) && fileCompact >= 0
+        ? fileCompact
+        : DEFAULT_CONFIG.limits.compactThresholdTokens,
   };
 
   const fileSessions = fileConfig.sessions ?? {};

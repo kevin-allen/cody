@@ -130,6 +130,27 @@ describe("limits.recursionLimit", () => {
   });
 });
 
+describe("limits.compactThresholdTokens", () => {
+  it("defaults to 150000", () => {
+    expect(resolveConfig().limits.compactThresholdTokens).toBe(150000);
+  });
+
+  it("can be overridden by the config file", () => {
+    const c = resolveConfig({ fileConfig: { limits: { compactThresholdTokens: 50000 } } });
+    expect(c.limits.compactThresholdTokens).toBe(50000);
+  });
+
+  it("accepts 0 to disable auto-compaction", () => {
+    const c = resolveConfig({ fileConfig: { limits: { compactThresholdTokens: 0 } } });
+    expect(c.limits.compactThresholdTokens).toBe(0);
+  });
+
+  it("ignores invalid values and falls back to default", () => {
+    expect(resolveConfig({ fileConfig: { limits: { compactThresholdTokens: -5 } } }).limits.compactThresholdTokens).toBe(150000);
+    expect(resolveConfig({ fileConfig: { limits: { compactThresholdTokens: 2.5 } } }).limits.compactThresholdTokens).toBe(150000);
+  });
+});
+
 describe("sessions configuration", () => {
   it("defaults to enabled true and no path", () => {
     const c = resolveConfig();

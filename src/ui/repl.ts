@@ -385,6 +385,19 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
           ),
         );
 
+        // Auto-compaction: if configured and this turn's context input tokens exceed the threshold,
+        // perform an inline auto-compaction. This runs before the auto-title work so the session id may change.
+        try {
+          const thresh = deps.config.limits.compactThresholdTokens;
+          if (typeof thresh === "number" && thresh > 0 && turnUsage && turnUsage.inputTokens > thresh) {
+            process.stdout.write(p.dim(`(context exceeds ${thresh} tokens - auto-compacting...)\n`));
+            // don't let failures block the prompt; doCompact swallows errors
+            await doCompact("auto");
+          }
+        } catch {
+          // swallow any unexpected errors from auto-compact attempt
+        }
+
         // Auto-title (best-effort): if store present, sessionId set, and session has no manual title,
         // fire an async background title generation (no await). Guard so we only run one per session at a time.
         try {
@@ -441,6 +454,31 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
       currentAbort = null;
       busy = false;
       drainQueuedInputs();
+    }
+  }
+
+  async function doCompact(trigger: "manual" | "auto"): Promise<void> {
+    if (trigger === "manual") process.stdout.write(p.dim("(compacting...)\n"));
+    try {
+      const summarizer = getModel(deps.config, "compact");
+      const newId = store ? store.newSessionId() : `repl-compact-${(clears += 1)}`;
+      const { messageCount, summary } = await compactThread(agent, summarizer, threadId, newId);
+      if (store) {
+        store.register(newId);
+        try {
+          store.touch(newId, summary.slice(0, 80), { inputTokens: 0, outputTokens: 0 });
+        } catch {
+          // best-effort
+        }
+      }
+      sessionId = store ? newId : sessionId;
+      threadId = newId;
+      process.stdout.write(p.dim(`(compacted ${messageCount} messages into a new session ${newId})\n`));
+    } catch (err) {
+      process.stdout.write(
+        `${p.red("compaction failed:")} ${(err as Error).message} — staying on the current session\n`,
+      );
+      // do not rethrow; auto-compaction must not prevent prompt from returning
     }
   }
 
@@ -534,25 +572,8 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
         break;
       }
       case "compact": {
-        process.stdout.write(p.dim("(compacting...)\n"));
-        try {
-          const summarizer = getModel(deps.config, "compact");
-          const newId = store ? store.newSessionId() : `repl-compact-${(clears += 1)}`;
-          const { messageCount, summary } = await compactThread(agent, summarizer, threadId, newId);
-          if (store) {
-            store.register(newId);
-            store.touch(newId, summary.slice(0, 80), { inputTokens: 0, outputTokens: 0 });
-          }
-          sessionId = store ? newId : sessionId;
-          threadId = newId;
-          process.stdout.write(
-            p.dim(`(compacted ${messageCount} messages into a new session ${newId})\n`),
-          );
-        } catch (err) {
-          process.stdout.write(
-            `${p.red("compaction failed:")} ${(err as Error).message} — staying on the current session\n`,
-          );
-        }
+        // Manual compact reuses the same doCompact path so behavior matches auto-compaction.
+        await doCompact("manual");
         break;
       }
       default:
