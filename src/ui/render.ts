@@ -1,4 +1,5 @@
 import type { ApprovalRequest } from "../tools/index.js";
+import type { SessionMeta } from "../sessions.js";
 
 /**
  * Whether to emit ANSI color: only on a TTY, and never when NO_COLOR is set
@@ -91,4 +92,22 @@ export function banner(
     p.dim("Type a request, or /help for commands. Ctrl-C cancels a turn; Ctrl-D exits."),
     "",
   ].join("\n");
+}
+
+export function formatSessionList(sessions: SessionMeta[], p: Palette, currentId?: string): string {
+  if (!sessions || sessions.length === 0) return "(no sessions)\n";
+
+  // compute pad width for index
+  const idxWidth = String(sessions.length).length;
+
+  return sessions
+    .map((s, idx) => {
+      const index = String(idx + 1).padEnd(idxWidth, " ");
+      const marker = s.id === currentId ? "*" : " ";
+      const tokens = (s.inputTokens ?? 0) + (s.outputTokens ?? 0);
+      const preview = s.preview ?? "";
+      // id, updatedAt, tokens, preview(dimmed)
+      return `${index} ${marker} ${s.id} ${s.updatedAt} ${tokens} ${p.dim(preview)}`;
+    })
+    .join("\n") + "\n";
 }

@@ -123,10 +123,11 @@ cody model [role]        Show the model a role resolves to.
 cody tools               List the tools and their permission policy.
 cody --help | --version
 cody --continue         Start or resume the most recent REPL session
-cody --resume <id>      Resume a specific session by id
+cody --resume <id|index|substring>      Resume a specific session by id, index, or a unique id substring
+cody sessions                     List known sessions (headless)
 ```
 
-In the REPL: type a request; `/help`, `/clear`, `/sessions`, `/exit` (or Ctrl-D). Ctrl-C
+In the REPL: type a request; `/help`, `/clear`, `/sessions`, `/resume <n|id>`, `/exit` (or Ctrl-D). Ctrl-C
 cancels the current turn.
 
 ## Docker

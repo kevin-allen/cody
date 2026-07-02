@@ -12,6 +12,8 @@ export interface SessionMeta {
   outputTokens: number;
 }
 
+export type SessionRefResult = { ok: true; id: string } | { ok: false; message: string };
+
 import type { BaseCheckpointSaver } from "@langchain/langgraph";
 
 export interface SessionStore {
@@ -114,4 +116,34 @@ export function openSessionStore(dbPath: string): SessionStore {
     },
     close: () => db.close(),
   };
+}
+
+/**
+ * Resolve a session reference. If `ref` is a number string (e.g. "1"), it's
+ * treated as a 1-based index into the sessions array (sessions are newest-first).
+ * Otherwise we first try an exact id match, then substring matches.
+ */
+export function resolveSessionRef(ref: string, sessions: SessionMeta[]): SessionRefResult {
+  if (/^[0-9]+$/.test(ref)) {
+    const n = parseInt(ref, 10);
+    if (n < 1 || n > sessions.length) {
+      return { ok: false, message: `no session #${n} (have ${sessions.length})` };
+    }
+    const s = sessions[n - 1];
+    if (!s) return { ok: false, message: `no session #${n} (have ${sessions.length})` };
+    return { ok: true, id: s.id };
+  }
+
+  // exact id match
+  const exact = sessions.find((s) => s.id === ref);
+  if (exact !== undefined) return { ok: true, id: exact.id };
+
+  // substring matches
+  const matches = sessions.filter((s) => s.id.includes(ref)).map((s) => s.id);
+  if (matches.length === 1) {
+    const id = matches[0]!;
+    return { ok: true, id };
+  }
+  if (matches.length > 1) return { ok: false, message: `ambiguous, matches: ${matches.join(", ")}` };
+  return { ok: false, message: `no session matching ${ref}` };
 }

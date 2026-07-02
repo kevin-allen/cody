@@ -245,8 +245,8 @@ invasive.
   mode (§4.4) and is the intended entrypoint for scripts and the Docker image
   (§4.7).
 - FR-40 (persistent sessions): conversation state is stored in SQLite via the LangGraph checkpointer, behind the src/sessions.ts module; enabled by default, sessions.enabled=false restores the in-memory behavior.
-- FR-41 (--continue resumes the most recent session, --resume <id> a specific one; unknown id exits 1 listing known ids; headless cody run stays stateless).
-- FR-42 (/sessions lists sessions newest-first with id, updated time, token total, preview, current marked with *).
+- FR-41 (--continue resumes the most recent session, --resume <id|index|substring> a specific one; unknown/ambiguous ref exits 1 listing known ids or an error (see src/sessions.ts) ; bare --resume shows an interactive picker to choose a session or start a new one; headless cody run stays stateless).
+- FR-42 (/sessions lists sessions newest-first with id, updated time, token total, preview, current marked with *; REPL supports `/resume <n|id>` to resume a session).
 
 ### 4.6 Configuration
 

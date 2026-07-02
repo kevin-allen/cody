@@ -14,6 +14,7 @@ import type { ApprovalRequest, ConfirmResult } from "../tools/index.js";
 import { createAgent, streamAgentEvents, repairDanglingToolCalls } from "../agent/graph.js";
 import type { UsageTotals } from "../agent/graph.js";
 import type { SessionStore } from "../sessions.js";
+import { resolveSessionRef } from "../sessions.js";
 import {
   makePalette,
   colorEnabled,
@@ -21,6 +22,7 @@ import {
   formatApproval,
   isAffirmative,
   parseApprovalAnswer,
+  formatSessionList,
 } from "./render.js";
 import type { Palette } from "./render.js";
 import {
@@ -30,17 +32,33 @@ import {
   DISABLE_BRACKETED_PASTE,
 } from "./paste.js";
 
-export type SlashCommand = "exit" | "clear" | "help" | "usage" | "sessions" | "unknown";
+export type SlashCommand = "exit" | "clear" | "help" | "usage" | "sessions" | "resume" | "unknown";
 
 /** Parse a slash command (pure — for testing). */
-export function parseSlash(input: string): SlashCommand {
-  const cmd = input.trim().slice(1).trim().toLowerCase();
-  if (cmd === "exit" || cmd === "quit") return "exit";
-  if (cmd === "clear") return "clear";
-  if (cmd === "help") return "help";
-  if (cmd === "usage") return "usage";
-  if (cmd === "sessions") return "sessions";
-  return "unknown";
+export function parseSlash(input: string): { cmd: SlashCommand; arg?: string } {
+  const trimmed = input.trim();
+  if (!trimmed.startsWith("/")) return { cmd: "unknown" };
+  const body = trimmed.slice(1);
+  if (!body) return { cmd: "unknown" };
+  const firstSpace = body.search(/\s/);
+  let token: string;
+  let rest: string | undefined;
+  if (firstSpace === -1) {
+    token = body;
+    rest = undefined;
+  } else {
+    token = body.slice(0, firstSpace);
+    rest = body.slice(firstSpace + 1);
+  }
+  const cmd = token.toLowerCase();
+  const arg = rest ? rest.trim() : undefined;
+  if (cmd === "exit" || cmd === "quit") return { cmd: "exit", arg };
+  if (cmd === "clear") return { cmd: "clear", arg };
+  if (cmd === "help") return { cmd: "help", arg };
+  if (cmd === "usage") return { cmd: "usage", arg };
+  if (cmd === "sessions") return { cmd: "sessions", arg };
+  if (cmd === "resume") return { cmd: "resume", arg };
+  return { cmd: "unknown", arg };
 }
 
 /** Whether a bare line is an attempt to quit without the slash (exit / quit). */
@@ -54,6 +72,7 @@ function helpText(p: Palette): string {
     `${p.bold("/clear")}  start a fresh conversation`,
     `${p.bold("/usage")}  print token usage totals for this session`,
     `${p.bold("/sessions")} list known sessions (if enabled)`,
+    `${p.bold("/resume")}   resume a previous session`,
     `${p.bold("/exit")}   quit (or Ctrl-D; plain "exit"/"quit" won't)`,
     "",
   ]
@@ -286,8 +305,9 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     }
   }
 
-  function handleCommand(input: string): void {
-    switch (parseSlash(input)) {
+  async function handleCommand(input: string): Promise<void> {
+    const parsed = parseSlash(input);
+    switch (parsed.cmd) {
       case "exit":
         rl.close();
         return;
@@ -323,11 +343,34 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
           break;
         }
         const list = store.list();
-        for (const s of list) {
-          const mark = sessionId && s.id === sessionId ? "*" : " ";
-          const total = s.inputTokens + s.outputTokens;
-          process.stdout.write(`${mark} ${s.id}  ${s.updatedAt}  ${total}  ${s.preview}\n`);
+        process.stdout.write(formatSessionList(list, p, sessionId));
+        break;
+      }
+      case "resume": {
+        if (!store) {
+          process.stdout.write(p.dim("(session persistence is disabled)\n"));
+          break;
         }
+        if (!parsed.arg) {
+          process.stdout.write(formatSessionList(store.list(), p, sessionId));
+          process.stdout.write(p.dim("usage: /resume <n|id>\n"));
+          break;
+        }
+        const res = resolveSessionRef(parsed.arg, store.list());
+        if (!res.ok) {
+          process.stdout.write(p.dim(res.message + "\n"));
+          break;
+        }
+        const id = res.id;
+        sessionId = id;
+        threadId = id;
+        sessionFirstInputValue = undefined;
+        try {
+          await repairDanglingToolCalls(agent, id);
+        } catch {
+          // best-effort
+        }
+        process.stdout.write(p.dim(`(resumed session ${id})\n`));
         break;
       }
       default:
@@ -343,7 +386,7 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
       return;
     }
     if (input.startsWith("/")) {
-      handleCommand(input);
+      void handleCommand(input);
       return;
     }
     void runTurn(input);

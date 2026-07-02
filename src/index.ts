@@ -10,7 +10,8 @@ import type { ApprovalRequest, ConfirmResult } from "./tools/index.js";
 import { createAgent, streamAgentText } from "./agent/graph.js";
 import { configureProxyFromEnv } from "./net/proxy.js";
 import { startRepl } from "./ui/repl.js";
-import { openSessionStore } from "./sessions.js";
+import { openSessionStore, resolveSessionRef } from "./sessions.js";
+import { makePalette, colorEnabled, formatSessionList } from "./ui/render.js";
 
 // Route hosted-provider HTTP through the standard proxy env vars when set
 // (honoring NO_PROXY, so local Ollama bypasses the proxy). Must run before any
@@ -128,7 +129,11 @@ async function main(): Promise<void> {
   const replFlags = argv.slice();
   const resumeIndex = replFlags.indexOf("--resume");
   let resumeId: string | undefined;
-  if (resumeIndex >= 0 && replFlags.length > resumeIndex + 1) resumeId = replFlags[resumeIndex + 1];
+  // treat missing next argv or a next argv that starts with - as a bare --resume
+  if (resumeIndex >= 0) {
+    const next = replFlags[resumeIndex + 1];
+    if (typeof next === "string" && !next.startsWith("-")) resumeId = next;
+  }
   const continueFlag = replFlags.includes("--continue");
 
   let store: ReturnType<typeof openSessionStore> | undefined;
@@ -137,13 +142,39 @@ async function main(): Promise<void> {
     const dbPath = config.sessions.path ?? join(process.cwd(), ".cody", "sessions.db");
     store = openSessionStore(dbPath);
     if (resumeId) {
-      if (!store.has(resumeId)) {
-        const ids = store.list().map((s) => s.id).join("\n");
-        process.stderr.write(`unknown session id: ${resumeId}\nknown ids:\n${ids}\n`);
+      const res = resolveSessionRef(resumeId, store.list());
+      if (!res.ok) {
+        process.stderr.write(res.message + "\n");
+        process.stderr.write(formatSessionList(store.list(), makePalette(colorEnabled()), undefined));
         process.exitCode = 1;
         return;
       }
-      resumeTarget = resumeId;
+      resumeTarget = res.id;
+    } else if (resumeIndex >= 0) {
+      // bare --resume handling: prompt the user unless there are no sessions
+      const list = store.list();
+      if (list.length === 0) {
+        // start a new one: leave resumeTarget undefined
+      } else {
+        process.stdout.write(formatSessionList(list, makePalette(colorEnabled()), undefined));
+        // prompt once
+        const { createInterface } = await import("node:readline");
+        const rl = createInterface({ input: process.stdin, output: process.stdout });
+        const answer = await new Promise<string>((resolve) => rl.question("resume which? [1-" + list.length + ", Enter = new session] ", resolve));
+        rl.close();
+        const ans = answer.trim();
+        if (ans.length === 0) {
+          // new session
+        } else {
+          const res = resolveSessionRef(ans, list);
+          if (!res.ok) {
+            process.stderr.write(res.message + "\n");
+            process.exitCode = 1;
+            return;
+          }
+          resumeTarget = res.id;
+        }
+      }
     } else if (continueFlag) {
       // start/resume: resume the most recent session when one exists,
       // otherwise start a new one (leave resumeTarget undefined)
@@ -151,6 +182,25 @@ async function main(): Promise<void> {
       // prefer latest() but fall back to list ordering in case
       resumeTarget = latest ? latest : undefined;
     }
+  } else {
+    // sessions disabled and user asked for the sessions subcommand -> print and exit
+    if (command === "sessions") {
+      process.stdout.write("(session persistence is disabled)\n");
+      return;
+    }
+  }
+
+  // sessions subcommand: print list and exit
+  if (command === "sessions") {
+    if (!config.sessions.enabled) {
+      process.stdout.write("(session persistence is disabled)\n");
+      return;
+    }
+    const dbPath = config.sessions.path ?? join(process.cwd(), ".cody", "sessions.db");
+    const s = openSessionStore(dbPath);
+    process.stdout.write(formatSessionList(s.list(), makePalette(colorEnabled()), undefined));
+    s.close();
+    return;
   }
 
   const replPromise = startRepl({ cwd: process.cwd(), config, version: readVersion(), store, resumeTarget });

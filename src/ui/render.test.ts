@@ -6,7 +6,9 @@ import {
   parseApprovalAnswer,
   formatDiff,
   formatApproval,
+  formatSessionList,
 } from "./render.js";
+import type { SessionMeta } from "../sessions.js";
 
 describe("colorEnabled", () => {
   it("is on for a TTY with no NO_COLOR", () => {
@@ -74,5 +76,29 @@ describe("formatting (plain palette)", () => {
       p,
     );
     expect(out).toContain("+hi");
+  });
+});
+
+describe("formatSessionList", () => {
+  const p = makePalette(false);
+  it("returns (no sessions) for empty list", () => {
+    expect(formatSessionList([], p)).toBe("(no sessions)\n");
+  });
+
+  it("marks current session and formats lines", () => {
+    const s: SessionMeta[] = [
+      { id: "s-one", createdAt: "", updatedAt: "u1", preview: "preview1", inputTokens: 1, outputTokens: 2 },
+      { id: "s-two", createdAt: "", updatedAt: "u2", preview: "preview2", inputTokens: 3, outputTokens: 4 },
+    ];
+    const out = formatSessionList(s, p, "s-two");
+    // two lines plus trailing newline
+    const lines = out.trim().split("\n");
+    expect(lines.length).toBe(2);
+    // first line corresponds to s-one (index 1)
+    expect(lines[0]).toContain("1 ");
+    expect(lines[0]).toContain("s-one");
+    // second line marked current with "*"
+    expect(lines[1]).toContain("*");
+    expect(lines[1]).toContain("s-two");
   });
 });
