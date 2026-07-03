@@ -221,23 +221,35 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     return { approved: true };
   };
 
-  // Build the agent prompt possibly augmented with MCP server summaries
-  const promptModule = await import("../agent/prompt.js");
-  // build skills catalog and include in system prompt
-  const skillsModule = await import("../skills.js");
-  const skills = skillsModule.loadSkillsCatalog(deps.cwd);
-  const systemPrompt = promptModule.withSkills(promptModule.withMcpServers(promptModule.SYSTEM_PROMPT, deps.mcpSummaries ?? []), skills);
-
   const store = deps.store;
   const saver = store ? store.saver : new MemorySaver();
 
-  // open memory store once for the process (best-effort)
+  // open memory store once for the process (best-effort) BEFORE assembling the system prompt
   let memory: import("../memory.js").MemoryStore | undefined = undefined;
   try {
     memory = openMemoryStore(join(deps.cwd, ".cody", "memory.db"));
   } catch {
     // best-effort
   }
+
+  // Build the agent prompt possibly augmented with MCP server summaries and startup digest from memories
+  const promptModule = await import("../agent/prompt.js");
+  // build skills catalog and include in system prompt
+  const skillsModule = await import("../skills.js");
+  const skills = skillsModule.loadSkillsCatalog(deps.cwd);
+
+  // compute startup digest once (best-effort)
+  let digest: import("../memory.js").MemoryRow[] = [];
+  try {
+    digest = memory ? memory.topMemories(8) : [];
+  } catch {
+    digest = [];
+  }
+
+  const systemPrompt = promptModule.withMemories(
+    promptModule.withSkills(promptModule.withMcpServers(promptModule.SYSTEM_PROMPT, deps.mcpSummaries ?? []), skills),
+    digest,
+  );
 
   let sessionId: string | undefined;
 

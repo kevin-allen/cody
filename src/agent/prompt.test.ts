@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { SYSTEM_PROMPT, withMcpServers } from "./prompt.js";
+import { SYSTEM_PROMPT, withMcpServers, withMemories } from "./prompt.js";
 
 describe("withMcpServers (FR-44a)", () => {
   it("returns the base prompt unchanged for an empty list", () => {
@@ -16,5 +16,21 @@ describe("withMcpServers (FR-44a)", () => {
     expect(out).toContain("list_repos");
     expect(out).toContain("Lab GitLab index.");
     expect(out).toContain("other");
+  });
+});
+
+describe("withMemories", () => {
+  it("returns base unchanged for empty", () => {
+    const base = "hello";
+    expect(withMemories(base, [])).toBe(base);
+  });
+
+  it("appends the remembered context for one memory", () => {
+    const base = "start";
+    const mem = [{ id: 1, kind: "decision", cue: "c", triggerText: "t", body: "we chose X because Y", scope: null, confidence: 2, uses: 1, lastUsed: null, created: "", sourceSession: null }];
+    const out = withMemories(base, mem as any);
+    expect(out).toContain("## Remembered context");
+    expect(out).toContain("[memory #");
+    expect(out).toContain("we chose X because Y");
   });
 });

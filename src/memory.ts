@@ -61,6 +61,8 @@ export interface MemoryStore {
   listMemories(): MemoryRow[];
   forget(id: number): void;
   priorInjectionThisSession(sessionId: string | undefined, fingerprint: string): number | undefined;
+  // return top durable memories suitable for a startup digest (decisions & milestones only)
+  topMemories(limit: number): MemoryRow[];
 }
 
 export function openMemoryStore(dbPath: string): MemoryStore {
@@ -388,6 +390,15 @@ export function openMemoryStore(dbPath: string): MemoryStore {
     insertMemory: (m) => transactionInsertMemory(m),
     recallByFingerprint: (fp) => recallByFingerprintImpl(fp),
     recallByText: (text, kind, limit) => recallByTextImpl(text, kind, limit),
+    // return top durable memories suitable for a startup digest (decisions & milestones only)
+    topMemories: (limit: number) => {
+      const rows = db
+        .prepare(
+          `SELECT * FROM memories WHERE kind IN ('decision','milestone') AND confidence > 0 ORDER BY confidence DESC, (last_used IS NOT NULL) DESC, last_used DESC, id DESC LIMIT ?`,
+        )
+        .all(limit) as any[];
+      return rows.map(mapRowToMemoryRow);
+    },
     bumpConfidence: (id, delta = 1) => transactionBump(id, delta),
     decrementConfidence: (id, delta = 1) => transactionDec(id, delta),
     touchUsed: (id, ts) => transactionTouch(id, ts),

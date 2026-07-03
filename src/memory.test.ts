@@ -59,9 +59,7 @@ describe("memory store", () => {
     const top = store.topFingerprints(2);
     expect(top.length).toBeLessThanOrEqual(2);
     // first fingerprint should be the boom one with count 2
-    const first = top[0];
-    expect(first).toBeDefined();
-    if (!first) throw new Error("missing first");
+    const first = top[0]!;
     expect(first.count).toBe(2);
 
     const total = store.failureCount();
@@ -144,11 +142,17 @@ describe("memory store", () => {
     const store = openMemoryStore(dbPath);
 
     const id = store.insertMemory({ kind: "milestone", cue: "m1", triggerText: "done", body: "completed" });
-    const before = store.listMemories().find((r) => r.id === id) as MemoryRow;
-    expect(before.uses).toBe(0);
+    const rowsBefore = store.listMemories();
+    const idxBefore = rowsBefore.findIndex((r) => r.id === id);
+    if (idxBefore === -1) throw new Error("missing before");
+    const beforeRow = rowsBefore[idxBefore]!;
+    expect(beforeRow.uses).toBe(0);
     store.touchUsed(id, new Date().toISOString());
-    const after = store.listMemories().find((r) => r.id === id) as MemoryRow;
-    expect(after.uses).toBeGreaterThanOrEqual(1);
+    const rowsAfter = store.listMemories();
+    const idxAfter = rowsAfter.findIndex((r) => r.id === id);
+    if (idxAfter === -1) throw new Error("missing after");
+    const afterRow = rowsAfter[idxAfter]!;
+    expect(afterRow.uses).toBeGreaterThanOrEqual(1);
 
     store.close();
   });
@@ -166,6 +170,45 @@ describe("memory store", () => {
     expect(resContent.length).toBeGreaterThanOrEqual(1);
     const ids = resContent.map((r) => r.id);
     expect(ids).toContain(id);
+
+    store.close();
+  });
+
+  it("topMemories returns only decision & milestone memories and excludes failures/demoted ones", () => {
+    wd = mkdtempSync(join(tmpdir(), "cody-mem-"));
+    const dbPath = join(wd, "mem.db");
+    const store = openMemoryStore(dbPath);
+
+    // insert a decision memory with confidence 5
+    const idHigh = store.insertMemory({ kind: "decision", cue: "d-high", triggerText: "choose high", body: "important decision", confidence: 5 });
+    // insert a milestone memory with confidence 2
+    const idMilestone = store.insertMemory({ kind: "milestone", cue: "m-low", triggerText: "milestone", body: "a milestone", confidence: 2 });
+    // insert a failure memory with high confidence (should be excluded)
+    const idFailure = store.insertMemory({ kind: "failure", cue: "f-bad", triggerText: "boom", body: "should be excluded", confidence: 9 });
+    // insert a decision memory that will be demoted to 0
+    const idDemoted = store.insertMemory({ kind: "decision", cue: "d-demote", triggerText: "later", body: "to be demoted" });
+    store.decrementConfidence(idDemoted, 10);
+
+    const top = store.topMemories(8);
+    expect(top.length).toBe(2);
+    const ids = top.map((r) => r.id);
+    // should contain high decision and milestone
+    expect(ids).toContain(idHigh);
+    expect(ids).toContain(idMilestone);
+    // should NOT contain failure or demoted
+    expect(ids).not.toContain(idFailure);
+    expect(ids).not.toContain(idDemoted);
+
+    // ordering: highest confidence first
+    const firstTop = top[0]!;
+    const secondTop = top[1]!;
+    expect(firstTop.confidence).toBeGreaterThan(secondTop.confidence);
+
+    // ensure only decision/milestone kinds present
+    for (const m of top) {
+      expect(["decision", "milestone"]).toContain(m.kind);
+      expect(m.confidence).toBeGreaterThan(0);
+    }
 
     store.close();
   });
