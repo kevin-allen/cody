@@ -152,4 +152,21 @@ describe("memory store", () => {
 
     store.close();
   });
+
+  it("stopwords-only queries do not recall decision memories", () => {
+    wd = mkdtempSync(join(tmpdir(), "cody-mem-"));
+    const dbPath = join(wd, "mem.db");
+    const store = openMemoryStore(dbPath);
+
+    const id = store.insertMemory({ kind: "decision", cue: "topic-d", triggerText: "default model gpt-5-mini", body: "We chose gpt-5-mini as the default model." });
+    const resStop = store.recallByText("list the files in it", "decision", 5);
+    expect(resStop.length).toBe(0);
+
+    const resContent = store.recallByText("default model", "decision", 5);
+    expect(resContent.length).toBeGreaterThanOrEqual(1);
+    const ids = resContent.map((r) => r.id);
+    expect(ids).toContain(id);
+
+    store.close();
+  });
 });

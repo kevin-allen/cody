@@ -257,7 +257,7 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     ...(deps.rawMcpTools ? createGatedMcpTools(ctx as unknown as import("../tools/index.js").ToolContext, deps.rawMcpTools) : []),
   ];
 
-  const agent = createAgent({ model, tools, checkpointer: saver, systemPrompt });
+  const agent = createAgent({ model, tools, checkpointer: saver, systemPrompt, memory, sessionId: () => sessionId });
   // undefined = sessions not used; null = awaiting first input; string = already set to first input consumed? We'll store first input value separately.
   let sessionFirstInputValue: string | null | undefined = undefined;
   // capture the initial user request for auto-title generation; persists for the session

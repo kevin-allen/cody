@@ -6,12 +6,18 @@ import type { BaseChatModel } from "@langchain/core/language_models/chat_models"
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { SYSTEM_PROMPT } from "./prompt.js";
 
+import { SystemMessage } from "@langchain/core/messages";
+
 export interface AgentDeps {
   readonly model: BaseChatModel;
   readonly tools: StructuredToolInterface[];
   readonly systemPrompt?: string;
   /** In-memory checkpointer to persist state across turns within a session (FR-3). */
   readonly checkpointer?: BaseCheckpointSaver;
+  /** Optional memory store for injecting remembered decisions into the system prompt. */
+  readonly memory?: import("../memory.js").MemoryStore;
+  /** Getter for the live session id (may change on compact/resume). */
+  readonly sessionId?: () => string | undefined;
 }
 
 /**
@@ -19,11 +25,58 @@ export interface AgentDeps {
  * model on one node and the tool registry on the other (FR-1). Provider-agnostic
  * — it depends only on BaseChatModel + the tools (FR-2).
  */
+function extractHumanText(m: BaseMessage): string {
+  const content = (m as { content?: unknown }).content;
+  if (typeof content === "string") return content;
+  try {
+    return JSON.stringify(content);
+  } catch {
+    return String(content ?? "");
+  }
+}
+
+export function buildMemoryPrompt(base: string, memory: import("../memory.js").MemoryStore | undefined, sessionIdGetter: (() => string | undefined) | undefined, state: { messages?: BaseMessage[] }) {
+  const messages = state.messages ?? [];
+  let effective = base;
+  try {
+    // find most recent HumanMessage from the end
+    const human = [...messages].reverse().find((m) => m._getType && m._getType() === "human");
+    if (!human) return [new SystemMessage(base), ...(messages as BaseMessage[])];
+    const humanText = extractHumanText(human).slice(0, 200);
+    if (!memory) return [new SystemMessage(base), ...(messages as BaseMessage[])];
+    const hits = memory.recallByText(humanText, "decision", 3);
+    if (hits.length > 0) {
+      effective += "\n\n## Relevant remembered context\n" + hits.map((h) => `- [memory #${h.id}] ${h.body}`).join("\n");
+      // record recall_event and touchUsed only if the very last message is a HumanMessage
+      const last = messages.at(-1);
+      if (last && last._getType && last._getType() === "human") {
+        try {
+          memory.recordRecallEvent({ ts: new Date().toISOString(), sessionId: sessionIdGetter?.(), cueKind: "task", cueText: humanText.slice(0, 200), matchedIds: hits.map((h) => h.id), injectedIds: hits.map((h) => h.id) });
+        } catch {
+          // swallow
+        }
+        try {
+          for (const h of hits) memory.touchUsed(h.id, new Date().toISOString());
+        } catch {
+          // swallow
+        }
+      }
+    }
+  } catch {
+    // fallback to base
+    return [new SystemMessage(base), ...(messages as BaseMessage[])];
+  }
+  return [new SystemMessage(effective), ...(messages as BaseMessage[])];
+}
+
 export function createAgent(deps: AgentDeps) {
+  const promptArg = deps.memory
+    ? (state: { messages?: BaseMessage[] }) => buildMemoryPrompt(deps.systemPrompt ?? SYSTEM_PROMPT, deps.memory, deps.sessionId, state)
+    : deps.systemPrompt ?? SYSTEM_PROMPT;
   return createReactAgent({
     llm: deps.model,
     tools: deps.tools,
-    prompt: deps.systemPrompt ?? SYSTEM_PROMPT,
+    prompt: promptArg,
     checkpointer: deps.checkpointer,
   });
 }

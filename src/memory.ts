@@ -214,14 +214,97 @@ export function openMemoryStore(dbPath: string): MemoryStore {
     return q.replace(/["'()*:+\-]/g, " ").trim();
   }
 
+  const STOPWORDS = new Set([
+    "the",
+    "a",
+    "an",
+    "and",
+    "or",
+    "but",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "to",
+    "of",
+    "in",
+    "on",
+    "at",
+    "for",
+    "with",
+    "from",
+    "by",
+    "as",
+    "it",
+    "its",
+    "this",
+    "that",
+    "these",
+    "those",
+    "i",
+    "you",
+    "we",
+    "they",
+    "he",
+    "she",
+    "do",
+    "does",
+    "did",
+    "how",
+    "what",
+    "why",
+    "when",
+    "where",
+    "which",
+    "who",
+    "our",
+    "your",
+    "my",
+    "me",
+    "us",
+    "can",
+    "could",
+    "should",
+    "would",
+    "will",
+    "shall",
+    "may",
+    "might",
+    "if",
+    "then",
+    "else",
+    "so",
+    "not",
+    "no",
+    "yes",
+    "up",
+    "out",
+    "about",
+    "into",
+    "over",
+    "than",
+    "too",
+    "very",
+    "just",
+    "get",
+    "got",
+  ]);
+
   function recallByTextImpl(text: string, kind?: string, limit = 3) {
     const q = sanitizeFtsQuery(text);
     if (!q) return [];
+    // tokenise and filter stopwords/short tokens
+    const rawWords = q.split(/\s+/).filter(Boolean);
+    const words = rawWords
+      .map((w) => w.toLowerCase())
+      .filter((w) => w.length >= 3 && !STOPWORDS.has(w));
+    if (words.length === 0) return [];
+
     // prefer FTS match; fallback to LIKE only if FTS is unavailable (throws)
     let rows: any[] = [];
     try {
-      const words = q.split(/\s+/).filter(Boolean);
-      if (words.length === 0) return [];
       // Use OR semantics so any query token can match; ranking by bm25 brings best matches first
       const matchQ = words.map((w) => `${w}`).join(" OR ");
       if (kind) {
@@ -240,8 +323,6 @@ export function openMemoryStore(dbPath: string): MemoryStore {
       }
     } catch (e) {
       // FTS not available -> fall back to LIKE (word-wise OR) search
-      const words = q.split(/\s+/).filter(Boolean);
-      if (words.length === 0) return [];
       const likeClauses = words.map(() => `(trigger_text LIKE ? OR body LIKE ? )`).join(" OR ");
       const params: any[] = [];
       for (const w of words) {
