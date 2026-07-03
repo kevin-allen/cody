@@ -19,7 +19,7 @@ import { createTools, createGatedMcpTools } from "../tools/index.js";
 import type { ApprovalRequest, ConfirmResult } from "../tools/index.js";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createAgent, streamAgentEvents, repairDanglingToolCalls, compactThread, serializeThread } from "../agent/graph.js";
-import { consolidate } from "../consolidate.js";
+import { consolidate, reviewProvisional } from "../consolidate.js";
 import type { UsageTotals } from "../agent/graph.js";
 import type { SessionStore } from "../sessions.js";
 import { resolveSessionRef } from "../sessions.js";
@@ -510,6 +510,43 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
         }
       }
       if (wrote > 0) process.stdout.write(p.dim(`(consolidated ${wrote} memor${wrote === 1 ? "y" : "ies"} from this session)\n`));
+
+      // Review this session's PROVISIONAL memories against the transcript and
+      // promote confirmed ones / prune the rest. Best-effort — never breaks compaction/exit.
+      try {
+        const provisional = memory.listProvisional().filter((m) => m.sourceSession === id);
+        if (provisional.length > 0) {
+          const verdicts = await reviewProvisional(
+            model,
+            transcript,
+            provisional.map((m, i) => ({ index: i, body: m.body })),
+          );
+          let promoted = 0;
+          let pruned = 0;
+          for (const v of verdicts) {
+            if (v.index < 0 || v.index >= provisional.length) continue;
+            const target = provisional[v.index]!;
+            try {
+              if (v.verdict === "confirmed") {
+                memory.promoteMemory(target.id);
+                promoted += 1;
+              } else {
+                memory.pruneProvisional(target.id);
+                pruned += 1;
+              }
+            } catch {
+              // continue
+            }
+          }
+          if (promoted > 0 || pruned > 0) {
+            process.stdout.write(
+              p.dim(`(reviewed ${promoted + pruned} provisional memories: ${promoted} promoted, ${pruned} pruned)\n`),
+            );
+          }
+        }
+      } catch {
+        // swallow
+      }
     } catch {
       // swallow
     }

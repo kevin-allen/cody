@@ -59,3 +59,53 @@ export async function consolidate(model: BaseChatModel, transcript: string): Pro
     return [];
   }
 }
+
+export type ProvisionalVerdict = { index: number; verdict: "confirmed" | "unconfirmed" | "wrong" };
+
+const REVIEW_INSTRUCTION =
+  "You are verifying provisional memory notes a coding agent recorded during a session. For EACH numbered note below, decide from the session transcript whether it is: \"confirmed\" (the session's outcome supports it — e.g. a claimed fix was actually followed by success, or a decision was actually made), \"unconfirmed\" (the transcript neither supports nor contradicts it), or \"wrong\" (the transcript contradicts it). Output ONLY a JSON array of objects {\"index\": <the note's number>, \"verdict\": \"confirmed\"|\"unconfirmed\"|\"wrong\"}. NOTES:\n";
+
+export async function reviewProvisional(
+  model: BaseChatModel,
+  transcript: string,
+  items: { index: number; body: string }[],
+): Promise<ProvisionalVerdict[]> {
+  if (items.length === 0) return [];
+  try {
+    const notes = items.map((i) => `${i.index}. ${i.body}`).join("\n");
+    const message = new HumanMessage(REVIEW_INSTRUCTION + notes + "\n\nTRANSCRIPT:\n" + transcript);
+    const res = await (model as any).invoke([message]);
+    const contentRaw = (res as { content?: unknown }).content;
+    let contentStr = "";
+    if (typeof contentRaw === "string") contentStr = contentRaw;
+    else if (Array.isArray(contentRaw)) contentStr = contentRaw.map((p) => String(p)).join("\n");
+    else if (contentRaw !== undefined && contentRaw !== null) contentStr = String(contentRaw);
+
+    const first = contentStr.indexOf("[");
+    const last = contentStr.lastIndexOf("]");
+    if (first === -1 || last === -1 || last <= first) return [];
+    const jsonSlice = contentStr.slice(first, last + 1);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(jsonSlice);
+    } catch {
+      return [];
+    }
+    if (!Array.isArray(parsed)) return [];
+
+    const validated: ProvisionalVerdict[] = [];
+    for (const el of parsed) {
+      if (!el || typeof el !== "object") continue;
+      const obj = el as Record<string, unknown>;
+      const index = obj.index;
+      if (typeof index !== "number" || !Number.isFinite(index)) continue;
+      const verdict = obj.verdict;
+      if (verdict !== "confirmed" && verdict !== "unconfirmed" && verdict !== "wrong") continue;
+      validated.push({ index, verdict });
+    }
+
+    return validated;
+  } catch {
+    return [];
+  }
+}
