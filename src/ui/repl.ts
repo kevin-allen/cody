@@ -1,6 +1,6 @@
 import { createInterface } from "node:readline";
 import { join } from "node:path";
-import { openMemoryStore } from "../memory.js";
+import { openMemoryStore, formatMemoryBreakdown } from "../memory.js";
 import { HumanMessage } from "@langchain/core/messages";
 import { sanitizeTitle } from "../sessions.js";
 import type { Transform } from "node:stream";
@@ -705,6 +705,7 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
               process.stdout.write(`  ${row.count}x ${row.fingerprint} ${sample}\n`);
             }
           }
+          process.stdout.write(`${formatMemoryBreakdown(memory.originStatusBreakdown())}\n`);
         } catch {
           process.stdout.write(p.dim("(memory store unavailable)\n"));
         }

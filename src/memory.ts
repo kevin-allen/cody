@@ -71,6 +71,9 @@ export interface MemoryStore {
   listProvisional(): MemoryRow[];
   // delete a provisional memory (and its FTS entry)
   pruneProvisional(id: number): void;
+  // grouped counts of memories by origin/status, plus how many of each group
+  // have been recalled at least once (uses > 0)
+  originStatusBreakdown(): { origin: string; status: string; count: number; recalled: number }[];
 }
 
 export function openMemoryStore(dbPath: string): MemoryStore {
@@ -453,6 +456,19 @@ export function openMemoryStore(dbPath: string): MemoryStore {
     promoteMemory: (id, confidence) => transactionPromote(id, confidence),
     listProvisional: () => selProvisional.all().map(mapRowToMemoryRow),
     pruneProvisional: (id) => transactionPruneProvisional(id),
+    originStatusBreakdown: () => {
+      const rows = db
+        .prepare(
+          `SELECT origin, status, COUNT(*) AS count, SUM(CASE WHEN uses > 0 THEN 1 ELSE 0 END) AS recalled FROM memories GROUP BY origin, status ORDER BY origin, status`,
+        )
+        .all() as { origin: string | null; status: string | null; count: number; recalled: number | null }[];
+      return rows.map((r) => ({
+        origin: r.origin ?? "consolidated",
+        status: r.status ?? "active",
+        count: r.count,
+        recalled: r.recalled ?? 0,
+      }));
+    },
     priorInjectionThisSession: (sessionId: string | undefined, fingerprint: string) => {
       try {
         const row = sessionId ? selPriorWithSession.get(fingerprint, sessionId) : selPriorNoSession.get(fingerprint);
@@ -466,6 +482,15 @@ export function openMemoryStore(dbPath: string): MemoryStore {
   };
 }
 
+
+// Pure function: render an origin/status breakdown for `cody memory stats` and `/memory`.
+export function formatMemoryBreakdown(
+  rows: { origin: string; status: string; count: number; recalled: number }[],
+): string {
+  if (rows.length === 0) return "memories by origin/status: (none)";
+  const lines = rows.map((r) => ` ${r.origin}/${r.status}: ${r.count} (${r.recalled} recalled)`);
+  return ["memories by origin/status:", ...lines].join("\n");
+}
 
 // Pure function: normalize an error string and return short stable hex digest
 export function fingerprintError(text: string): string {

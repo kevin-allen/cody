@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import Database from "better-sqlite3";
-import { fingerprintError, openMemoryStore } from "./memory.js";
+import { fingerprintError, openMemoryStore, formatMemoryBreakdown } from "./memory.js";
 import type { MemoryRow } from "./memory.js";
 
 describe("memory store", () => {
@@ -315,5 +315,59 @@ describe("memory store", () => {
     expect(store.listProvisional().map((r) => r.id)).not.toContain(idProv2);
 
     store.close();
+  });
+
+  it("originStatusBreakdown groups by origin/status and tallies recalled counts", () => {
+    wd = mkdtempSync(join(tmpdir(), "cody-mem-"));
+    const dbPath = join(wd, "mem.db");
+    const store = openMemoryStore(dbPath);
+
+    // consolidated/active (default origin/status)
+    const idConsolidated = store.insertMemory({ kind: "decision", cue: "c-1", triggerText: "consolidated one", body: "consolidated lesson" });
+    // user/active
+    const idUser = store.insertMemory({ kind: "decision", cue: "u-1", triggerText: "user one", body: "user note", origin: "user", status: "active" });
+    // agent/provisional
+    const idAgent = store.insertMemory({ kind: "failure", cue: "a-1", triggerText: "agent one", body: "agent lesson", origin: "agent", status: "provisional", sourceSession: "S" });
+
+    // recall (touch) only the consolidated one
+    store.touchUsed(idConsolidated, new Date().toISOString());
+
+    const breakdown = store.originStatusBreakdown();
+    // sanity: ids exist (avoids unused-var lint while documenting intent)
+    expect([idConsolidated, idUser, idAgent].every((id) => typeof id === "number")).toBe(true);
+
+    const consolidatedActive = breakdown.find((r) => r.origin === "consolidated" && r.status === "active");
+    expect(consolidatedActive).toBeDefined();
+    expect(consolidatedActive?.count).toBe(1);
+    expect(consolidatedActive?.recalled).toBe(1);
+
+    const userActive = breakdown.find((r) => r.origin === "user" && r.status === "active");
+    expect(userActive).toBeDefined();
+    expect(userActive?.count).toBe(1);
+    expect(userActive?.recalled).toBe(0);
+
+    const agentProvisional = breakdown.find((r) => r.origin === "agent" && r.status === "provisional");
+    expect(agentProvisional).toBeDefined();
+    expect(agentProvisional?.count).toBe(1);
+    expect(agentProvisional?.recalled).toBe(0);
+
+    // sorted by origin then status
+    const order = breakdown.map((r) => `${r.origin}/${r.status}`);
+    const sorted = [...order].sort();
+    expect(order).toEqual(sorted);
+
+    store.close();
+  });
+
+  it("formatMemoryBreakdown renders grouped lines and handles the empty case", () => {
+    const rendered = formatMemoryBreakdown([
+      { origin: "consolidated", status: "active", count: 3, recalled: 2 },
+      { origin: "user", status: "active", count: 1, recalled: 0 },
+    ]);
+    expect(rendered).toBe(
+      "memories by origin/status:\n consolidated/active: 3 (2 recalled)\n user/active: 1 (0 recalled)",
+    );
+
+    expect(formatMemoryBreakdown([])).toBe("memories by origin/status: (none)");
   });
 });

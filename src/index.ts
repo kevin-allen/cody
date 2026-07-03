@@ -13,7 +13,7 @@ import { startRepl } from "./ui/repl.js";
 import { connectMcpServers } from "./tools/mcp.js";
 import { createGatedMcpTools } from "./tools/index.js";
 import { openSessionStore, resolveSessionRef } from "./sessions.js";
-import { openMemoryStore } from "./memory.js";
+import { openMemoryStore, formatMemoryBreakdown } from "./memory.js";
 import { makePalette, colorEnabled, formatSessionList } from "./ui/render.js";
 
 // Route hosted-provider HTTP through the standard proxy env vars when set
@@ -289,6 +289,7 @@ async function main(): Promise<void> {
             process.stdout.write(`  ${row.count}x ${row.fingerprint} ${sample}\n`);
           }
         }
+        process.stdout.write(`${formatMemoryBreakdown(m.originStatusBreakdown())}\n`);
       } finally {
         try { m.close(); } catch { /* best-effort */ }
       }
