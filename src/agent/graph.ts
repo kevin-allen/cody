@@ -169,6 +169,28 @@ function statusOf(result: unknown): ToolEventStatus {
   return "ok";
 }
 
+/**
+ * Extract displayable assistant text from a message's content. OpenAI streams
+ * text as a plain string; Anthropic streams it as an array of content blocks
+ * (e.g. { type: "text", text: "..." }). Without handling the array form, Claude's
+ * responses render as empty output.
+ */
+export function extractText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    let out = "";
+    for (const block of content) {
+      if (typeof block === "string") out += block;
+      else if (block && typeof block === "object") {
+        const b = block as { type?: string; text?: unknown };
+        if ((b.type === "text" || b.type === "text_delta") && typeof b.text === "string") out += b.text;
+      }
+    }
+    return out;
+  }
+  return "";
+}
+
 // Serialize messages one line per message: role plus text content. Tool
 // results are truncated to 400 chars. Exported helper used by compactThread and the REPL consolidator.
 export function serializeThread(messages: BaseMessage[]): string {
@@ -257,8 +279,9 @@ export async function* streamAgentEvents(
         rec.args += piece.args ?? "";
       }
     }
-    if (type === "ai" && typeof content === "string" && content.length > 0) {
-      yield { kind: "text", text: content };
+    if (type === "ai") {
+      const text = extractText(content);
+      if (text.length > 0) yield { kind: "text", text };
     }
     if (type === "tool") {
       const { name, tool_call_id } = msg as { name?: string; tool_call_id?: string };

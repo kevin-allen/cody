@@ -12,7 +12,7 @@ import { createTools } from "../tools/index.js";
 import type { ToolContext } from "../tools/index.js";
 import { MemorySaver } from "@langchain/langgraph";
 import { HumanMessage } from "@langchain/core/messages";
-import { createAgent, runAgentOnce, streamAgentEvents, repairDanglingToolCalls } from "./graph.js";
+import { createAgent, runAgentOnce, streamAgentEvents, repairDanglingToolCalls, extractText } from "./graph.js";
 import type { AgentEvent } from "./graph.js";
 
 /**
@@ -51,6 +51,32 @@ function ctx(mode: "auto" | "readonly"): ToolContext {
     confirm: () => Promise.resolve({ approved: true as const }),
   };
 }
+
+describe("extractText", () => {
+  it("renders plain strings and Anthropic-style content-block arrays, ignoring non-text blocks", () => {
+    // (a) plain string returns itself
+    expect(extractText("Hello world")).toBe("Hello world");
+
+    // (b) Anthropic-style array of text blocks joins into one string
+    expect(
+      extractText([
+        { type: "text", text: "Hello" },
+        { type: "text", text: " world" },
+      ]),
+    ).toBe("Hello world");
+
+    // (c) non-text blocks (e.g. tool_use) contribute no text
+    expect(
+      extractText([
+        { type: "tool_use", name: "x" },
+        { type: "text", text: "Hi" },
+      ]),
+    ).toBe("Hi");
+
+    // (d) non-string, non-array content returns ""
+    expect(extractText(undefined)).toBe("");
+  });
+});
 
 describe("agent ReAct loop", () => {
   it("executes a tool the model requests, then returns the final answer (auto mode)", async () => {
