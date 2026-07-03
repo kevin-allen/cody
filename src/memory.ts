@@ -41,6 +41,8 @@ export type MemoryRow = {
   lastUsed?: string | null;
   created: string;
   sourceSession?: string | null;
+  status: string;
+  origin: string;
 };
 
 export interface MemoryStore {
@@ -52,9 +54,9 @@ export interface MemoryStore {
   close(): void;
 
   // new store-layer API for consolidated memories
-  insertMemory(m: { kind: string; cue: string; triggerText?: string; body: string; scope?: string; confidence?: number; sourceSession?: string }): number;
-  recallByFingerprint(fingerprint: string): MemoryRow | undefined;
-  recallByText(text: string, kind?: string, limit?: number): MemoryRow[];
+  insertMemory(m: { kind: string; cue: string; triggerText?: string; body: string; scope?: string; confidence?: number; sourceSession?: string; status?: string; origin?: string }): number;
+  recallByFingerprint(fingerprint: string, currentSession?: string): MemoryRow | undefined;
+  recallByText(text: string, kind?: string, limit?: number, currentSession?: string): MemoryRow[];
   bumpConfidence(id: number, delta?: number): void;
   decrementConfidence(id: number, delta?: number): void;
   touchUsed(id: number, ts: string): void;
@@ -63,6 +65,12 @@ export interface MemoryStore {
   priorInjectionThisSession(sessionId: string | undefined, fingerprint: string): number | undefined;
   // return top durable memories suitable for a startup digest (decisions & milestones only)
   topMemories(limit: number): MemoryRow[];
+  // promote a provisional memory to active status (optionally bumping confidence)
+  promoteMemory(id: number, confidence?: number): void;
+  // list all provisional-status memories, newest first
+  listProvisional(): MemoryRow[];
+  // delete a provisional memory (and its FTS entry)
+  pruneProvisional(id: number): void;
 }
 
 export function openMemoryStore(dbPath: string): MemoryStore {
@@ -125,9 +133,22 @@ export function openMemoryStore(dbPath: string): MemoryStore {
       uses INTEGER DEFAULT 0,
       last_used TEXT,
       created TEXT,
-      source_session TEXT
+      source_session TEXT,
+      status TEXT DEFAULT 'active',
+      origin TEXT DEFAULT 'consolidated'
     )`,
   ).run();
+
+  // Migration: ensure status/origin columns exist (older DBs may lack them)
+  const memInfo = db.prepare("PRAGMA table_info(memories)").all() as { name: string }[];
+  const hasStatus = memInfo.some((r) => r.name === "status");
+  if (!hasStatus) {
+    db.prepare("ALTER TABLE memories ADD COLUMN status TEXT DEFAULT 'active'").run();
+  }
+  const hasOrigin = memInfo.some((r) => r.name === "origin");
+  if (!hasOrigin) {
+    db.prepare("ALTER TABLE memories ADD COLUMN origin TEXT DEFAULT 'consolidated'").run();
+  }
 
   // Create an FTS5 table for full-text search over trigger_text and body.
   // We'll maintain this manually in the insert/update/delete methods by writing to the FTS table with the same rowid.
@@ -138,8 +159,11 @@ export function openMemoryStore(dbPath: string): MemoryStore {
   }
 
   const insMem = db.prepare(
-    `INSERT INTO memories(kind, cue, trigger_text, body, scope, confidence, uses, last_used, created, source_session) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO memories(kind, cue, trigger_text, body, scope, confidence, uses, last_used, created, source_session, status, origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
+  const promoteStmt = db.prepare(`UPDATE memories SET status = 'active' WHERE id = ?`);
+  const promoteWithConfidenceStmt = db.prepare(`UPDATE memories SET status = 'active', confidence = ? WHERE id = ?`);
+  const selProvisional = db.prepare(`SELECT * FROM memories WHERE status = 'provisional' ORDER BY id DESC`);
   const selMemByKindCue = db.prepare(`SELECT * FROM memories WHERE kind = ? AND cue = ? LIMIT 1`);
   const selMemById = db.prepare(`SELECT * FROM memories WHERE id = ?`);
   const updConfidence = db.prepare(`UPDATE memories SET confidence = confidence + ? WHERE id = ?`);
@@ -160,6 +184,8 @@ export function openMemoryStore(dbPath: string): MemoryStore {
     scope?: string;
     confidence?: number;
     sourceSession?: string;
+    status?: string;
+    origin?: string;
   }) => {
     // dedupe-on-write
     const existing = selMemByKindCue.get(m.kind, m.cue) as any;
@@ -172,7 +198,9 @@ export function openMemoryStore(dbPath: string): MemoryStore {
     const body = (m.body ?? "").slice(0, 600);
     const trigger = (m.triggerText ?? m.cue ?? "").slice(0, 1000);
     const confidence = m.confidence ?? 1;
-    const info = insMem.run(m.kind, m.cue, trigger, body, m.scope ?? null, confidence, 0, null, created, m.sourceSession ?? null);
+    const status = m.status ?? "active";
+    const origin = m.origin ?? "consolidated";
+    const info = insMem.run(m.kind, m.cue, trigger, body, m.scope ?? null, confidence, 0, null, created, m.sourceSession ?? null, status, origin);
     const id = info.lastInsertRowid as number;
     // write into FTS (if exists)
     try {
@@ -184,6 +212,19 @@ export function openMemoryStore(dbPath: string): MemoryStore {
   });
 
   const transactionForget = db.transaction((id: number) => {
+    delFts.run(id);
+    delMem.run(id);
+  });
+
+  const transactionPromote = db.transaction((id: number, confidence?: number) => {
+    if (typeof confidence === "number") {
+      promoteWithConfidenceStmt.run(confidence, id);
+    } else {
+      promoteStmt.run(id);
+    }
+  });
+
+  const transactionPruneProvisional = db.transaction((id: number) => {
     delFts.run(id);
     delMem.run(id);
   });
@@ -200,12 +241,12 @@ export function openMemoryStore(dbPath: string): MemoryStore {
     touchStmt.run(ts, id);
   });
 
-  function recallByFingerprintImpl(fingerprint: string) {
+  function recallByFingerprintImpl(fingerprint: string, currentSession?: string) {
     const row = db
       .prepare(
-        `SELECT * FROM memories WHERE kind = 'failure' AND cue = ? AND confidence > 0 ORDER BY (last_used IS NOT NULL) DESC, last_used DESC, confidence DESC, id DESC LIMIT 1`,
+        `SELECT * FROM memories WHERE kind = 'failure' AND cue = ? AND confidence > 0 AND (status = 'active' OR status IS NULL OR (status = 'provisional' AND source_session = ?)) ORDER BY (last_used IS NOT NULL) DESC, last_used DESC, confidence DESC, id DESC LIMIT 1`,
       )
-      .get(fingerprint) as any;
+      .get(fingerprint, currentSession ?? null) as any;
     if (!row) return undefined;
     return mapRowToMemoryRow(row);
   }
@@ -294,7 +335,7 @@ export function openMemoryStore(dbPath: string): MemoryStore {
     "got",
   ]);
 
-  function recallByTextImpl(text: string, kind?: string, limit = 3) {
+  function recallByTextImpl(text: string, kind?: string, limit = 3, currentSession?: string) {
     const q = sanitizeFtsQuery(text);
     if (!q) return [];
     // tokenise and filter stopwords/short tokens
@@ -309,19 +350,20 @@ export function openMemoryStore(dbPath: string): MemoryStore {
     try {
       // Use OR semantics so any query token can match; ranking by bm25 brings best matches first
       const matchQ = words.map((w) => `${w}`).join(" OR ");
+      const statusClause = `(m.status = 'active' OR m.status IS NULL OR (m.status = 'provisional' AND m.source_session = ?))`;
       if (kind) {
         // reference the FTS table by name (memories_fts) — MATCH does not accept table aliases
         rows = db
           .prepare(
-            `SELECT m.* FROM memories m JOIN memories_fts ON memories_fts.rowid = m.id WHERE m.confidence > 0 AND m.kind = ? AND memories_fts MATCH ? ORDER BY bm25(memories_fts), m.confidence DESC, (m.last_used IS NOT NULL) DESC, m.last_used DESC, m.id DESC LIMIT ?`,
+            `SELECT m.* FROM memories m JOIN memories_fts ON memories_fts.rowid = m.id WHERE m.confidence > 0 AND m.kind = ? AND ${statusClause} AND memories_fts MATCH ? ORDER BY bm25(memories_fts), m.confidence DESC, (m.last_used IS NOT NULL) DESC, m.last_used DESC, m.id DESC LIMIT ?`,
           )
-          .all(kind, matchQ, limit);
+          .all(kind, currentSession ?? null, matchQ, limit);
       } else {
         rows = db
           .prepare(
-            `SELECT m.* FROM memories m JOIN memories_fts ON memories_fts.rowid = m.id WHERE m.confidence > 0 AND memories_fts MATCH ? ORDER BY bm25(memories_fts), m.confidence DESC, (m.last_used IS NOT NULL) DESC, m.last_used DESC, m.id DESC LIMIT ?`,
+            `SELECT m.* FROM memories m JOIN memories_fts ON memories_fts.rowid = m.id WHERE m.confidence > 0 AND ${statusClause} AND memories_fts MATCH ? ORDER BY bm25(memories_fts), m.confidence DESC, (m.last_used IS NOT NULL) DESC, m.last_used DESC, m.id DESC LIMIT ?`,
           )
-          .all(matchQ, limit);
+          .all(currentSession ?? null, matchQ, limit);
       }
     } catch (e) {
       // FTS not available -> fall back to LIKE (word-wise OR) search
@@ -331,12 +373,14 @@ export function openMemoryStore(dbPath: string): MemoryStore {
         const like = `%${w}%`;
         params.push(like, like);
       }
+      const statusClause = `(status = 'active' OR status IS NULL OR (status = 'provisional' AND source_session = ?))`;
       let sql: string;
       if (kind) {
-        sql = `SELECT * FROM memories WHERE confidence > 0 AND kind = ? AND (${likeClauses}) ORDER BY confidence DESC, (last_used IS NOT NULL) DESC, last_used DESC, id DESC LIMIT ?`;
-        params.unshift(kind);
+        sql = `SELECT * FROM memories WHERE confidence > 0 AND kind = ? AND ${statusClause} AND (${likeClauses}) ORDER BY confidence DESC, (last_used IS NOT NULL) DESC, last_used DESC, id DESC LIMIT ?`;
+        params.unshift(kind, currentSession ?? null);
       } else {
-        sql = `SELECT * FROM memories WHERE confidence > 0 AND (${likeClauses}) ORDER BY confidence DESC, (last_used IS NOT NULL) DESC, last_used DESC, id DESC LIMIT ?`;
+        sql = `SELECT * FROM memories WHERE confidence > 0 AND ${statusClause} AND (${likeClauses}) ORDER BY confidence DESC, (last_used IS NOT NULL) DESC, last_used DESC, id DESC LIMIT ?`;
+        params.unshift(currentSession ?? null);
       }
       params.push(limit);
       rows = db.prepare(sql).all(...params);
@@ -358,6 +402,8 @@ export function openMemoryStore(dbPath: string): MemoryStore {
       lastUsed: row.last_used ?? null,
       created: row.created ?? "",
       sourceSession: row.source_session ?? null,
+      status: row.status ?? "active",
+      origin: row.origin ?? "consolidated",
     };
   }
 
@@ -388,13 +434,13 @@ export function openMemoryStore(dbPath: string): MemoryStore {
 
     // store-layer API
     insertMemory: (m) => transactionInsertMemory(m),
-    recallByFingerprint: (fp) => recallByFingerprintImpl(fp),
-    recallByText: (text, kind, limit) => recallByTextImpl(text, kind, limit),
+    recallByFingerprint: (fp, currentSession) => recallByFingerprintImpl(fp, currentSession),
+    recallByText: (text, kind, limit, currentSession) => recallByTextImpl(text, kind, limit, currentSession),
     // return top durable memories suitable for a startup digest (decisions & milestones only)
     topMemories: (limit: number) => {
       const rows = db
         .prepare(
-          `SELECT * FROM memories WHERE kind IN ('decision','milestone') AND confidence > 0 ORDER BY confidence DESC, (last_used IS NOT NULL) DESC, last_used DESC, id DESC LIMIT ?`,
+          `SELECT * FROM memories WHERE kind IN ('decision','milestone') AND confidence > 0 AND (status = 'active' OR status IS NULL) ORDER BY confidence DESC, (last_used IS NOT NULL) DESC, last_used DESC, id DESC LIMIT ?`,
         )
         .all(limit) as any[];
       return rows.map(mapRowToMemoryRow);
@@ -404,6 +450,9 @@ export function openMemoryStore(dbPath: string): MemoryStore {
     touchUsed: (id, ts) => transactionTouch(id, ts),
     listMemories: () => listAll.all().map(mapRowToMemoryRow),
     forget: (id) => transactionForget(id),
+    promoteMemory: (id, confidence) => transactionPromote(id, confidence),
+    listProvisional: () => selProvisional.all().map(mapRowToMemoryRow),
+    pruneProvisional: (id) => transactionPruneProvisional(id),
     priorInjectionThisSession: (sessionId: string | undefined, fingerprint: string) => {
       try {
         const row = sessionId ? selPriorWithSession.get(fingerprint, sessionId) : selPriorNoSession.get(fingerprint);

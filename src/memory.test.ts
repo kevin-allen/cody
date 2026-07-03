@@ -212,4 +212,108 @@ describe("memory store", () => {
 
     store.close();
   });
+
+  it("provisional memories are session-scoped for recall, excluded from topMemories, and promotable", () => {
+    wd = mkdtempSync(join(tmpdir(), "cody-mem-"));
+    const dbPath = join(wd, "mem.db");
+    const store = openMemoryStore(dbPath);
+
+    // an existing active/NULL-status memory recalls regardless of currentSession
+    const idActiveDecision = store.insertMemory({ kind: "decision", cue: "active-topic", triggerText: "use widget tool", body: "we use the widget tool", confidence: 5 });
+    const activeAnySession = store.recallByText("widget", "decision", 5, "B");
+    expect(activeAnySession.map((r) => r.id)).toContain(idActiveDecision);
+    const activeNoSession = store.recallByText("widget", "decision", 5);
+    expect(activeNoSession.map((r) => r.id)).toContain(idActiveDecision);
+
+    // insert a provisional failure memory sourced from session 'A'
+    const fp = "fp-provisional-1";
+    const idProv = store.insertMemory({
+      kind: "failure",
+      cue: fp,
+      triggerText: "gizmo failed to start",
+      body: "restart the gizmo daemon",
+      status: "provisional",
+      sourceSession: "A",
+    });
+
+    // recallByText: matches for the originating session, not for another/omitted session
+    const byTextA = store.recallByText("gizmo", "failure", 5, "A");
+    expect(byTextA.map((r) => r.id)).toContain(idProv);
+    const byTextB = store.recallByText("gizmo", "failure", 5, "B");
+    expect(byTextB.map((r) => r.id)).not.toContain(idProv);
+    const byTextNone = store.recallByText("gizmo", "failure", 5);
+    expect(byTextNone.map((r) => r.id)).not.toContain(idProv);
+
+    // recallByFingerprint: same session-scoping behavior
+    const byFpA = store.recallByFingerprint(fp, "A");
+    expect(byFpA?.id).toBe(idProv);
+    const byFpB = store.recallByFingerprint(fp, "B");
+    expect(byFpB).toBeUndefined();
+    const byFpNone = store.recallByFingerprint(fp);
+    expect(byFpNone).toBeUndefined();
+
+    // provisional memory never appears in topMemories, even if it were decision/milestone-kind
+    const idProvDecision = store.insertMemory({
+      kind: "decision",
+      cue: "prov-decision",
+      triggerText: "provisional decision",
+      body: "not yet confirmed",
+      status: "provisional",
+      sourceSession: "A",
+      confidence: 9,
+    });
+    const top = store.topMemories(20);
+    expect(top.map((r) => r.id)).not.toContain(idProvDecision);
+
+    // promote the provisional decision memory: now recalls from any session and appears in topMemories
+    store.promoteMemory(idProvDecision);
+    const afterPromoteAnySession = store.recallByText("provisional decision", "decision", 5, "B");
+    expect(afterPromoteAnySession.map((r) => r.id)).toContain(idProvDecision);
+    const afterPromoteNoSession = store.recallByText("provisional decision", "decision", 5);
+    expect(afterPromoteNoSession.map((r) => r.id)).toContain(idProvDecision);
+    const topAfter = store.topMemories(20);
+    expect(topAfter.map((r) => r.id)).toContain(idProvDecision);
+
+    // promoteMemory with an explicit confidence sets it
+    const idProvConfidence = store.insertMemory({
+      kind: "decision",
+      cue: "prov-confidence",
+      triggerText: "confidence bump",
+      body: "should end with confidence 7",
+      status: "provisional",
+      sourceSession: "A",
+      confidence: 1,
+    });
+    store.promoteMemory(idProvConfidence, 7);
+    const promoted = store.listMemories().find((r) => r.id === idProvConfidence);
+    expect(promoted?.status).toBe("active");
+    expect(promoted?.confidence).toBe(7);
+
+    // listProvisional returns only provisional rows
+    const idProv2 = store.insertMemory({
+      kind: "failure",
+      cue: "fp-provisional-2",
+      triggerText: "another provisional",
+      body: "temp lesson",
+      status: "provisional",
+      sourceSession: "A",
+    });
+    const provisionalRows = store.listProvisional();
+    const provisionalIds = provisionalRows.map((r) => r.id);
+    expect(provisionalIds).toContain(idProv);
+    expect(provisionalIds).toContain(idProv2);
+    expect(provisionalIds).not.toContain(idActiveDecision);
+    expect(provisionalIds).not.toContain(idProvDecision); // was promoted above
+    for (const r of provisionalRows) {
+      expect(r.status).toBe("provisional");
+    }
+
+    // pruneProvisional deletes the row
+    store.pruneProvisional(idProv2);
+    const afterPrune = store.listMemories().find((r) => r.id === idProv2);
+    expect(afterPrune).toBeUndefined();
+    expect(store.listProvisional().map((r) => r.id)).not.toContain(idProv2);
+
+    store.close();
+  });
 });
