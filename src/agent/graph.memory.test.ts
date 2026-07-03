@@ -30,4 +30,58 @@ describe("agent memory prompt builder", () => {
 
     store.close();
   });
+
+  it("recalls a provisional memory only within its own session", () => {
+    const dbPath = join(wd, "mem-provisional.db");
+    const store = openMemoryStore(dbPath);
+    store.insertMemory({
+      kind: "decision",
+      cue: "cache-warmup",
+      triggerText: "pre-warm the cache",
+      body: "always pre-warm the cache before benchmarking",
+      status: "provisional",
+      origin: "agent",
+      sourceSession: "S",
+    });
+
+    const base = "base system prompt";
+    const messages = [new HumanMessage("Should we pre-warm the cache before benchmarking?")];
+
+    const inSession = buildMemoryPrompt(base, store, () => "S", { messages });
+    const inSessionTxt = (inSession[0] as SystemMessage).text ?? "";
+    expect(inSessionTxt).toContain("always pre-warm the cache before benchmarking");
+
+    const crossSession = buildMemoryPrompt(base, store, () => "OTHER", { messages });
+    const crossSessionTxt = (crossSession[0] as SystemMessage).text ?? "";
+    expect(crossSessionTxt).not.toContain("always pre-warm the cache before benchmarking");
+
+    store.close();
+  });
+
+  it("recalls an active memory regardless of the current session", () => {
+    const dbPath = join(wd, "mem-active.db");
+    const store = openMemoryStore(dbPath);
+    store.insertMemory({
+      kind: "decision",
+      cue: "retry-policy",
+      triggerText: "retry failed requests",
+      body: "always retry failed network requests three times",
+      status: "active",
+    });
+
+    const base = "base system prompt";
+    const messages = [new HumanMessage("What is our policy on retrying failed requests?")];
+
+    const sameSession = buildMemoryPrompt(base, store, () => "S", { messages });
+    expect((sameSession[0] as SystemMessage).text ?? "").toContain(
+      "always retry failed network requests three times",
+    );
+
+    const otherSession = buildMemoryPrompt(base, store, () => "OTHER", { messages });
+    expect((otherSession[0] as SystemMessage).text ?? "").toContain(
+      "always retry failed network requests three times",
+    );
+
+    store.close();
+  });
 });

@@ -17,6 +17,37 @@ const cfg: Config = {
   mcp: { servers: {} },
 };
 
+describe("remember tool", () => {
+  it("writes a provisional, agent-origin memory scoped to the current session", async () => {
+    const wd = mkdtempSync(join(tmpdir(), "cody-remember-"));
+    const store = openMemoryStore(join(wd, "m.db"));
+
+    const ctx: ToolContext = {
+      workdir: wd,
+      config: cfg,
+      confirm: async () => ({ approved: true }),
+      memory: store,
+      sessionId: "S",
+    };
+
+    const tools = createTools(ctx);
+    const remember = tools.find((t) => t.name === "remember");
+    expect(remember).toBeDefined();
+
+    await remember!.invoke({ kind: "decision", body: "always pre-warm the cache" });
+
+    const provisional = store.listProvisional();
+    const hit = provisional.find((m) => m.body === "always pre-warm the cache");
+    expect(hit).toBeDefined();
+    expect(hit!.status).toBe("provisional");
+    expect(hit!.origin).toBe("agent");
+    expect(hit!.sourceSession).toBe("S");
+
+    store.close();
+    rmSync(wd, { recursive: true, force: true });
+  });
+});
+
 describe("gate failure memory injection and reconsolidation", () => {
   it("injects memory when a failure matches a stored memory and records a recall_event", async () => {
     const wd = mkdtempSync(join(tmpdir(), "cody-mem-"));

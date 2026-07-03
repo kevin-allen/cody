@@ -44,7 +44,7 @@ export function buildMemoryPrompt(base: string, memory: import("../memory.js").M
     if (!human) return [new SystemMessage(base), ...(messages as BaseMessage[])];
     const humanText = extractHumanText(human).slice(0, 200);
     if (!memory) return [new SystemMessage(base), ...(messages as BaseMessage[])];
-    const hits = memory.recallByText(humanText, "decision", 3);
+    const hits = memory.recallByText(humanText, "decision", 3, sessionIdGetter?.());
     if (hits.length > 0) {
       effective += "\n\n## Relevant remembered context\n" + hits.map((h) => `- [memory #${h.id}] ${h.body}`).join("\n");
       // record recall_event and touchUsed only if the very last message is a HumanMessage

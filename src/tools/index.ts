@@ -53,6 +53,11 @@ export const TOOL_INFO: readonly { name: string; action: ToolAction; description
   { name: "write_file", action: "write", description: "Create or overwrite a file." },
   { name: "edit_file", action: "edit", description: "Replace a unique string in a file." },
   { name: "run_shell", action: "shell", description: "Run a shell command." },
+  {
+    name: "remember",
+    action: "read",
+    description: "Record a durable lesson for future sessions (provisional until consolidation).",
+  },
 ];
 
 /** Apply the permission policy for an action, then execute (FR-18..FR-22). */
@@ -103,9 +108,9 @@ export async function gate(
           }
 
           // 2. recall by fingerprint, then by text fallback
-          let hit = ctx.memory.recallByFingerprint(fp);
+          let hit = ctx.memory.recallByFingerprint(fp, ctx.sessionId);
           if (!hit) {
-            const byText = ctx.memory.recallByText(result as string, "failure", 1);
+            const byText = ctx.memory.recallByText(result as string, "failure", 1, ctx.sessionId);
             if (byText && byText.length > 0) hit = byText[0];
           }
 
@@ -365,5 +370,40 @@ export function createTools(ctx: ToolContext): StructuredToolInterface[] {
     },
   );
 
-  return [readFile, listDir, glob, grep, writeFile, editFile, runShellTool, loadSkill, readSkillFile];
+  // agent self-encoded memory: an internal write with no filesystem/shell side
+  // effect, so it runs directly without going through the approval gate.
+  const remember = tool(
+    ({ kind, body }) => {
+      try {
+        if (!ctx.memory) {
+          return Promise.resolve("(memory store unavailable — not recorded)");
+        }
+        const id = ctx.memory.insertMemory({
+          kind,
+          cue: body.slice(0, 80),
+          triggerText: body,
+          body,
+          status: "provisional",
+          origin: "agent",
+          confidence: 1,
+          sourceSession: ctx.sessionId,
+        });
+        return Promise.resolve(
+          `recorded a provisional memory (#${id}) — it will be reviewed and promoted or pruned during consolidation.`,
+        );
+      } catch {
+        return Promise.resolve("(could not record memory)");
+      }
+    },
+    {
+      name: "remember",
+      description: "Record a durable lesson for future sessions (provisional until consolidation).",
+      schema: z.object({
+        kind: z.enum(["failure", "decision", "milestone"]).describe("kind of memory"),
+        body: z.string().describe("the durable lesson, one or two sentences"),
+      }),
+    },
+  );
+
+  return [readFile, listDir, glob, grep, writeFile, editFile, runShellTool, loadSkill, readSkillFile, remember];
 }

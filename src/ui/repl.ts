@@ -40,7 +40,7 @@ import {
   DISABLE_BRACKETED_PASTE,
 } from "./paste.js";
 
-export type SlashCommand = "exit" | "clear" | "help" | "usage" | "sessions" | "resume" | "title" | "compact" | "skills" | "memory" | "unknown";
+export type SlashCommand = "exit" | "clear" | "help" | "usage" | "sessions" | "resume" | "title" | "compact" | "skills" | "memory" | "remember" | "unknown";
 
 /** Parse a slash command (pure — for testing). */
 export function parseSlash(input: string): { cmd: SlashCommand; arg?: string } {
@@ -63,7 +63,7 @@ export function parseSlash(input: string): { cmd: SlashCommand; arg?: string } {
   // and strip trailing spaces/tabs but preserve newlines; otherwise trim.
   let arg: string | undefined;
   if (!rest) arg = undefined;
-  else if (cmd === "title") {
+  else if (cmd === "title" || cmd === "remember") {
     let a = rest;
     if (a.startsWith(" ")) a = a.slice(1);
     a = a.replace(/[ \t]+$/g, "");
@@ -80,6 +80,7 @@ export function parseSlash(input: string): { cmd: SlashCommand; arg?: string } {
   if (cmd === "title") return { cmd: "title", arg };
   if (cmd === "compact") return { cmd: "compact", arg };
   if (cmd === "memory") return { cmd: "memory", arg };
+  if (cmd === "remember") return { cmd: "remember", arg };
   return { cmd: "unknown", arg };
 }
 
@@ -98,6 +99,7 @@ function helpText(p: Palette): string {
     `${p.bold("/title")}   view or set a manual session title`,
     `${p.bold("/compact")}  compact the current session into a fresh one`,
     `${p.bold("/memory")} show recorded failure-memory stats`,
+    `${p.bold("/remember")} save a durable note to memory`,
     `${p.bold("/exit")}   quit (or Ctrl-D; plain "exit"/"quit" won't)`,
     "",
   ]
@@ -668,6 +670,32 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
           }
         } catch {
           process.stdout.write(p.dim("(memory store unavailable)\n"));
+        }
+        break;
+      }
+      case "remember": {
+        if (!memory) {
+          process.stdout.write(p.dim("(memory store unavailable)\n"));
+          break;
+        }
+        if (!parsed.arg) {
+          process.stdout.write(p.dim("usage: /remember <text>\n"));
+          break;
+        }
+        try {
+          const id = memory.insertMemory({
+            kind: "decision",
+            cue: parsed.arg.slice(0, 80),
+            triggerText: parsed.arg,
+            body: parsed.arg,
+            status: "active",
+            origin: "user",
+            confidence: 3,
+            sourceSession: sessionId,
+          });
+          process.stdout.write(p.dim(`(remembered #${id})\n`));
+        } catch {
+          process.stdout.write(p.dim("(could not record memory)\n"));
         }
         break;
       }

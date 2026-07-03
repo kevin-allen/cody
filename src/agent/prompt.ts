@@ -20,6 +20,8 @@ Working discipline:
 
 This section was distilled from failure modes observed while cody built its own features.
 Acceptance-tested: a three-part task now completes all parts and ends with an explicit checklist verification.
+
+Memory: when you learn something durable and non-obvious that would help a future session — a surprising failure and the fix that resolved it, a design decision and its rationale, or a milestone — call the \`remember\` tool to record it. Prefer facts not already in the code or git history. These notes are provisional and are verified later, so recording a tentative lesson is safe.
 `;
 
 export function withMcpServers(base: string, summaries: McpServerSummary[]): string {
