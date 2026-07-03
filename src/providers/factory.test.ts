@@ -30,9 +30,20 @@ describe("buildModel", () => {
     expect(m).toBeInstanceOf(ChatOllama);
   });
 
+  it("builds an (OpenAI-compatible) ChatOpenAI for the deepseek provider", () => {
+    const m = buildModel(
+      { provider: "deepseek", model: "deepseek-v4-pro" },
+      { DEEPSEEK_API_KEY: "test-deepseek" },
+    );
+    expect(m).toBeInstanceOf(ChatOpenAI);
+  });
+
   it("throws a clear error when the required API key is missing", () => {
     expect(() => buildModel({ provider: "openai", model: "gpt-4o" }, {})).toThrow(ProviderError);
     expect(() => buildModel({ provider: "openai", model: "gpt-4o" }, {})).toThrow(/OPENAI_API_KEY/);
+    expect(() => buildModel({ provider: "deepseek", model: "deepseek-v4-pro" }, {})).toThrow(
+      /DEEPSEEK_API_KEY/,
+    );
   });
 });
 

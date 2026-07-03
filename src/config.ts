@@ -1,14 +1,17 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-export type ProviderName = "openai" | "anthropic" | "ollama";
+export type ProviderName = "openai" | "anthropic" | "ollama" | "deepseek";
 
 export interface ModelDef {
   readonly provider: ProviderName;
   readonly model: string;
   readonly temperature?: number;
   readonly maxTokens?: number;
-  /** Ollama server URL; ignored by other providers. */
+  /**
+   * Base URL for the provider's API — the Ollama server, or a DeepSeek /
+   * OpenAI-compatible endpoint. Ignored by the openai and anthropic providers.
+   */
   readonly baseUrl?: string;
 }
 
@@ -66,6 +69,8 @@ export interface Config {
 export const DEFAULT_CONFIG: Config = {
   models: {
     default: { provider: "openai", model: "gpt-4o", temperature: 0 },
+    "deepseek-pro": { provider: "deepseek", model: "deepseek-v4-pro", temperature: 0 },
+    "deepseek-flash": { provider: "deepseek", model: "deepseek-v4-flash", temperature: 0 },
   },
   roles: { agent: "default" },
   permissions: {

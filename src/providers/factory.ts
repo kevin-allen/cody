@@ -6,6 +6,7 @@ import type { Config, ModelDef } from "../config.js";
 import { modelDefForRole } from "../config.js";
 
 const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
+const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 
 export class ProviderError extends Error {}
 
@@ -41,6 +42,18 @@ export function buildModel(def: ModelDef, env: NodeJS.ProcessEnv = process.env):
         model: def.model,
         temperature: def.temperature,
         baseUrl: def.baseUrl ?? env.OLLAMA_BASE_URL ?? DEFAULT_OLLAMA_BASE_URL,
+      });
+    case "deepseek":
+      // DeepSeek exposes an OpenAI-compatible API — reuse ChatOpenAI, pointed
+      // at DeepSeek's base URL, with the DeepSeek key.
+      return new ChatOpenAI({
+        model: def.model,
+        temperature: def.temperature,
+        maxTokens: def.maxTokens,
+        apiKey: requireKey(env, "DEEPSEEK_API_KEY", "deepseek"),
+        configuration: {
+          baseURL: def.baseUrl ?? env.DEEPSEEK_API_URL ?? DEFAULT_DEEPSEEK_BASE_URL,
+        },
       });
     default: {
       const exhaustive: never = def.provider;

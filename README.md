@@ -4,7 +4,7 @@ A terminal-native, model-agnostic coding assistant, built in TypeScript on
 [LangGraph](https://github.com/langchain-ai/langgraphjs). It runs in your
 terminal, reads and searches your codebase, edits files, and runs commands —
 with you approving anything that changes your machine — against a local model
-(Ollama) or a hosted one (OpenAI / Anthropic), chosen by config.
+(Ollama) or a hosted one (OpenAI, Anthropic, or DeepSeek), chosen by config.
 
 **Design principles** (see [`REQUIREMENTS.md`](./REQUIREMENTS.md)):
 
@@ -87,8 +87,9 @@ defaults → `cody.config.json` in the working directory → environment variabl
 - **Models are a named catalog + role assignments** — define a model once, point
   any role at it. Adding "use a cheaper model for X later" is a one-line change.
 - **API keys live only in `.env`**, never in the config file: `OPENAI_API_KEY`
-  (default provider), `ANTHROPIC_API_KEY`. Ollama needs none
-  (`OLLAMA_BASE_URL`, default `http://localhost:11434`).
+  (default provider), `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY` (DeepSeek is
+  OpenAI-compatible; `DEEPSEEK_API_URL` defaults to `https://api.deepseek.com`).
+  Ollama needs none (`OLLAMA_BASE_URL`, default `http://localhost:11434`).
 - Quick overrides: `--model deep` / `CODY_AGENT_MODEL=deep`;
   `--mode auto` / `--auto`, `--readonly`, `CODY_MODE=auto`.
 
