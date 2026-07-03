@@ -1,4 +1,6 @@
 import { createInterface } from "node:readline";
+import { join } from "node:path";
+import { openMemoryStore } from "../memory.js";
 import { HumanMessage } from "@langchain/core/messages";
 import { sanitizeTitle } from "../sessions.js";
 import type { Transform } from "node:stream";
@@ -37,7 +39,7 @@ import {
   DISABLE_BRACKETED_PASTE,
 } from "./paste.js";
 
-export type SlashCommand = "exit" | "clear" | "help" | "usage" | "sessions" | "resume" | "title" | "compact" | "skills" | "unknown";
+export type SlashCommand = "exit" | "clear" | "help" | "usage" | "sessions" | "resume" | "title" | "compact" | "skills" | "memory" | "unknown";
 
 /** Parse a slash command (pure — for testing). */
 export function parseSlash(input: string): { cmd: SlashCommand; arg?: string } {
@@ -76,6 +78,7 @@ export function parseSlash(input: string): { cmd: SlashCommand; arg?: string } {
   if (cmd === "resume") return { cmd: "resume", arg };
   if (cmd === "title") return { cmd: "title", arg };
   if (cmd === "compact") return { cmd: "compact", arg };
+  if (cmd === "memory") return { cmd: "memory", arg };
   return { cmd: "unknown", arg };
 }
 
@@ -93,6 +96,7 @@ function helpText(p: Palette): string {
     `${p.bold("/resume")}   resume a previous session`,
     `${p.bold("/title")}   view or set a manual session title`,
     `${p.bold("/compact")}  compact the current session into a fresh one`,
+    `${p.bold("/memory")} show recorded failure-memory stats`,
     `${p.bold("/exit")}   quit (or Ctrl-D; plain "exit"/"quit" won't)`,
     "",
   ]
@@ -216,19 +220,6 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     return { approved: true };
   };
 
-  const ctx = {
-    workdir: deps.cwd,
-    get config() {
-      return liveConfig;
-    },
-    confirm,
-  };
-
-  const tools = [
-    ...createTools(ctx),
-    ...(deps.rawMcpTools ? createGatedMcpTools(ctx as unknown as import("../tools/index.js").ToolContext, deps.rawMcpTools) : []),
-  ];
-
   // Build the agent prompt possibly augmented with MCP server summaries
   const promptModule = await import("../agent/prompt.js");
   // build skills catalog and include in system prompt
@@ -239,9 +230,34 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
   const store = deps.store;
   const saver = store ? store.saver : new MemorySaver();
 
-  const agent = createAgent({ model, tools, checkpointer: saver, systemPrompt });
+  // open memory store once for the process (best-effort)
+  let memory: import("../memory.js").MemoryStore | undefined = undefined;
+  try {
+    memory = openMemoryStore(join(deps.cwd, ".cody", "memory.db"));
+  } catch {
+    // best-effort
+  }
 
   let sessionId: string | undefined;
+
+  const ctx = {
+    workdir: deps.cwd,
+    get config() {
+      return liveConfig;
+    },
+    confirm,
+    memory,
+    get sessionId() {
+      return sessionId;
+    },
+  };
+
+  const tools = [
+    ...createTools(ctx as unknown as import("../tools/index.js").ToolContext),
+    ...(deps.rawMcpTools ? createGatedMcpTools(ctx as unknown as import("../tools/index.js").ToolContext, deps.rawMcpTools) : []),
+  ];
+
+  const agent = createAgent({ model, tools, checkpointer: saver, systemPrompt });
   // undefined = sessions not used; null = awaiting first input; string = already set to first input consumed? We'll store first input value separately.
   let sessionFirstInputValue: string | null | undefined = undefined;
   // capture the initial user request for auto-title generation; persists for the session
@@ -590,6 +606,28 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
         await doCompact("manual");
         break;
       }
+      case "memory": {
+        if (!memory) {
+          process.stdout.write(p.dim("(memory store unavailable)\n"));
+          break;
+        }
+        try {
+          const failureCount = memory.failureCount();
+          const distinctFingerprintCount = memory.distinctFingerprintCount();
+          process.stdout.write(`memory: ${failureCount} failures, ${distinctFingerprintCount} distinct fingerprints\n`);
+          if (failureCount > 0) {
+            process.stdout.write(`top recurring:\n`);
+            for (const row of memory.topFingerprints(10)) {
+              let sample = (row.sampleText ?? "").replace(/\s+/g, " ").trim();
+              if (sample.length > 70) sample = sample.slice(0, 70);
+              process.stdout.write(`  ${row.count}x ${row.fingerprint} ${sample}\n`);
+            }
+          }
+        } catch {
+          process.stdout.write(p.dim("(memory store unavailable)\n"));
+        }
+        break;
+      }
       default:
         process.stdout.write(p.dim(`unknown command: ${input} (try /help)\n`));
     }
@@ -662,4 +700,18 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
   } catch {
     // swallow
   }
+
+  // Close memory store if opened (best-effort)
+  try {
+    if (memory) {
+      try {
+        memory.close();
+      } catch {
+        // best-effort
+      }
+    }
+  } catch {
+    // swallow
+  }
 }
+

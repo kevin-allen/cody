@@ -13,6 +13,7 @@ import { startRepl } from "./ui/repl.js";
 import { connectMcpServers } from "./tools/mcp.js";
 import { createGatedMcpTools } from "./tools/index.js";
 import { openSessionStore, resolveSessionRef } from "./sessions.js";
+import { openMemoryStore } from "./memory.js";
 import { makePalette, colorEnabled, formatSessionList } from "./ui/render.js";
 
 // Route hosted-provider HTTP through the standard proxy env vars when set
@@ -269,6 +270,31 @@ async function main(): Promise<void> {
     }
     process.stdout.write(formatSessionList(s.list(), makePalette(colorEnabled()), undefined));
     s.close();
+    return;
+  }
+
+  // memory subcommand: print failure stats and exit
+  if (command === "memory") {
+    try {
+      const m = openMemoryStore(join(process.cwd(), ".cody", "memory.db"));
+      try {
+        const failureCount = m.failureCount();
+        const distinctFingerprintCount = m.distinctFingerprintCount();
+        process.stdout.write(`memory: ${failureCount} failures, ${distinctFingerprintCount} distinct fingerprints\n`);
+        if (failureCount > 0) {
+          process.stdout.write(`top recurring:\n`);
+          for (const row of m.topFingerprints(10)) {
+            let sample = (row.sampleText ?? "").replace(/\s+/g, " ").trim();
+            if (sample.length > 70) sample = sample.slice(0, 70);
+            process.stdout.write(`  ${row.count}x ${row.fingerprint} ${sample}\n`);
+          }
+        }
+      } finally {
+        try { m.close(); } catch { /* best-effort */ }
+      }
+    } catch {
+      process.stdout.write("memory: (could not open memory store)\n");
+    }
     return;
   }
 

@@ -1,4 +1,6 @@
 import { tool } from "@langchain/core/tools";
+import { fingerprintError } from "../memory.js";
+import type { MemoryStore } from "../memory.js";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 import type { Config, ToolAction } from "../config.js";
@@ -38,6 +40,8 @@ export interface ToolContext {
   readonly config: Config;
   /** Called for `ask` policies. A denial's reason is passed back to the model. */
   readonly confirm: (req: ApprovalRequest) => Promise<ConfirmResult>;
+  readonly memory?: MemoryStore;
+  readonly sessionId?: string;
 }
 
 /** Static metadata for each tool (name, action, description) — no context needed. */
@@ -70,8 +74,37 @@ export async function gate(
       return result.reason ? `[denied by user — reason: ${result.reason}]` : "[denied by user]";
     }
   }
-  return exec();
+
+  // Execute and capture the result; preserve previous behavior for thrown errors.
+  const maybe = exec();
+  const result = await Promise.resolve(maybe);
+
+  try {
+    // Detect genuine failures: starts with "[error]", starts with "[timed out",
+    // or contains an exit marker with nonzero code like "[exit 1]".
+    const isFailure =
+      typeof result === "string" &&
+      (result.startsWith("[error]") || result.startsWith("[timed out") || /\[exit ([1-9][0-9]*)\]/.test(result));
+    if (isFailure && ctx.memory) {
+      try {
+        const fp = fingerprintError(result as string);
+        ctx.memory.recordFailureEvent({
+          ts: new Date().toISOString(),
+          sessionId: ctx.sessionId,
+          fingerprint: fp,
+          errorText: (result as string).slice(0, 2000),
+        });
+      } catch {
+        // swallow any errors from recording — logging must never break a tool
+      }
+    }
+  } catch {
+    // swallow any errors during detection/recording (shouldn't happen)
+  }
+
+  return result;
 }
+
 
 function friendlyError(err: unknown): string {
   return `[error] ${(err as Error).message ?? String(err)}`;
