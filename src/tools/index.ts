@@ -164,6 +164,35 @@ export async function gate(
     // swallow any errors during detection/recording (shouldn't happen)
   }
 
+  // Best-effort milestone hook: record a provisional milestone memory when a
+  // git commit shell command succeeds. Never affects the returned result.
+  if (ctx.memory) {
+    try {
+      const isGitCommit = req.action === "shell" && /^\s*git\s+commit\b/.test(req.preview);
+      const isSuccess = typeof result === "string" && result.includes("[exit 0]");
+      if (isGitCommit && isSuccess) {
+        const m = req.preview.match(/-m\s+(?:"([^"]*)"|'([^']*)')/);
+        const subject = (m && (m[1] ?? m[2])) || "changes";
+        try {
+          ctx.memory.insertMemory({
+            kind: "milestone",
+            cue: `commit: ${subject.slice(0, 60)}`,
+            triggerText: subject,
+            body: `Committed: ${subject}`,
+            status: "provisional",
+            origin: "event",
+            confidence: 1,
+            sourceSession: ctx.sessionId,
+          });
+        } catch {
+          // swallow
+        }
+      }
+    } catch {
+      // swallow any errors during milestone detection/recording
+    }
+  }
+
   return result;
 }
 

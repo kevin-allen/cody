@@ -48,6 +48,65 @@ describe("remember tool", () => {
   });
 });
 
+describe("gate milestone hook on successful git commit", () => {
+  it("records a provisional milestone memory when a git commit succeeds", async () => {
+    const wd = mkdtempSync(join(tmpdir(), "cody-commit-"));
+    const store = openMemoryStore(join(wd, "m.db"));
+
+    const ctx: ToolContext = {
+      workdir: wd,
+      config: cfg,
+      confirm: async () => ({ approved: true }),
+      memory: store,
+      sessionId: "S",
+    };
+
+    const { gate } = await import("./index.js");
+    await gate(
+      ctx,
+      { action: "shell", title: "Run", preview: 'git commit -m "memory: add feature (FR-99)"' },
+      () => "[main abc1234] memory: add feature (FR-99)\n 2 files changed\n[exit 0]",
+    );
+
+    const provisional = store.listProvisional();
+    const hit = provisional.find(
+      (m) => m.kind === "milestone" && m.origin === "event" && m.body.includes("memory: add feature (FR-99)"),
+    );
+    expect(hit).toBeDefined();
+    expect(hit!.status).toBe("provisional");
+
+    store.close();
+    rmSync(wd, { recursive: true, force: true });
+  });
+
+  it("does not record a milestone memory when the git commit fails", async () => {
+    const wd = mkdtempSync(join(tmpdir(), "cody-commit-fail-"));
+    const store = openMemoryStore(join(wd, "m.db"));
+
+    const ctx: ToolContext = {
+      workdir: wd,
+      config: cfg,
+      confirm: async () => ({ approved: true }),
+      memory: store,
+      sessionId: "S",
+    };
+
+    const { gate } = await import("./index.js");
+    await gate(
+      ctx,
+      { action: "shell", title: "Run", preview: 'git commit -m "broken commit"' },
+      () => "error: nothing to commit\n[exit 1]",
+    );
+
+    const provisional = store.listProvisional();
+    const hit = provisional.find((m) => m.kind === "milestone" && m.origin === "event");
+    expect(hit).toBeUndefined();
+
+    store.close();
+    rmSync(wd, { recursive: true, force: true });
+  });
+});
+
 describe("gate failure memory injection and reconsolidation", () => {
   it("injects memory when a failure matches a stored memory and records a recall_event", async () => {
     const wd = mkdtempSync(join(tmpdir(), "cody-mem-"));
