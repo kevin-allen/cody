@@ -18,7 +18,8 @@ import { getModel, assertToolCapable } from "../providers/factory.js";
 import { createTools, createGatedMcpTools } from "../tools/index.js";
 import type { ApprovalRequest, ConfirmResult } from "../tools/index.js";
 import type { StructuredToolInterface } from "@langchain/core/tools";
-import { createAgent, streamAgentEvents, repairDanglingToolCalls, compactThread } from "../agent/graph.js";
+import { createAgent, streamAgentEvents, repairDanglingToolCalls, compactThread, serializeThread } from "../agent/graph.js";
+import { consolidate } from "../consolidate.js";
 import type { UsageTotals } from "../agent/graph.js";
 import type { SessionStore } from "../sessions.js";
 import { resolveSessionRef } from "../sessions.js";
@@ -476,10 +477,40 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     }
   }
 
+  async function consolidateThread(id: string): Promise<void> {
+    try {
+      if (!memory) return;
+      const state = await agent.getState({ configurable: { thread_id: id } });
+      const messages = (state.values as { messages?: import("@langchain/core/messages").BaseMessage[] }).messages ?? [];
+      if (messages.length < 3) return;
+      const transcript = serializeThread(messages);
+      const model = getModel(deps.config, "memory");
+      const records = await consolidate(model, transcript).catch(() => []);
+      let wrote = 0;
+      for (const r of records) {
+        try {
+          memory.insertMemory({ kind: r.kind, cue: r.cue ?? "", triggerText: r.triggerText, body: r.body, scope: r.scope, confidence: r.confidence ?? 1, sourceSession: id });
+          wrote += 1;
+        } catch {
+          // continue
+        }
+      }
+      if (wrote > 0) process.stdout.write(p.dim(`(consolidated ${wrote} memor${wrote === 1 ? "y" : "ies"} from this session)\n`));
+    } catch {
+      // swallow
+    }
+  }
+
   async function doCompact(trigger: "manual" | "auto"): Promise<void> {
     if (trigger === "manual") process.stdout.write(p.dim("(compacting...)\n"));
     try {
       const summarizer = getModel(deps.config, "compact");
+      // before compacting, consolidate the old thread (best-effort)
+      try {
+        await consolidateThread(threadId);
+      } catch {
+        // swallow
+      }
       const newId = store ? store.newSessionId() : `repl-compact-${(clears += 1)}`;
       const { messageCount, summary } = await compactThread(agent, summarizer, threadId, newId);
       if (store) {
@@ -688,10 +719,16 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
   cleanupTerminal();
   process.stdout.write(p.dim("\nbye\n"));
 
-  // On REPL close, attempt to prune checkpoints for the current session (best-effort)
+  // On REPL close, attempt to consolidate the thread and prune checkpoints for the current session (best-effort)
   try {
     if (store && sessionId) {
       try {
+        // consolidate current thread before pruning checkpoints; best-effort
+        try {
+          await consolidateThread(threadId);
+        } catch {
+          // swallow
+        }
         store.pruneCheckpoints(sessionId);
       } catch {
         // best-effort

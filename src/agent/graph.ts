@@ -169,6 +169,32 @@ function statusOf(result: unknown): ToolEventStatus {
   return "ok";
 }
 
+// Serialize messages one line per message: role plus text content. Tool
+// results are truncated to 400 chars. Exported helper used by compactThread and the REPL consolidator.
+export function serializeThread(messages: BaseMessage[]): string {
+  const lines: string[] = [];
+  for (const m of messages) {
+    const role = typeof m._getType === "function" ? m._getType() : "unknown";
+    const contentRaw = (m as { content?: unknown }).content;
+    let contentStr = "";
+    if (typeof contentRaw === "string") contentStr = contentRaw;
+    else if (contentRaw !== undefined) {
+      try {
+        contentStr = JSON.stringify(contentRaw);
+      } catch {
+        contentStr = String(contentRaw);
+      }
+    }
+    if (role === "tool") {
+      if (contentStr.length > 400) contentStr = contentStr.slice(0, 400 - 1) + "…";
+    }
+    // Collapse newlines to single spaces so each message is one line.
+    contentStr = contentStr.replace(/\s+/g, " ").trim();
+    lines.push(`${role}: ${contentStr}`);
+  }
+  return lines.join("\n");
+}
+
 /**
  * Stream the turn as typed events (FR-4, FR-25): assistant text as it is
  * produced, plus one "tool" event per completed tool run so the UI can show
@@ -282,30 +308,7 @@ export async function compactThread(
   const state = await agent.getState(config);
   const messages = (state.values as { messages?: BaseMessage[] }).messages ?? [];
 
-  // Serialize messages one line per message: role plus text content. Tool
-  // results are truncated to 400 chars.
-  const lines: string[] = [];
-  for (const m of messages) {
-    const role = typeof m._getType === "function" ? m._getType() : "unknown";
-    const contentRaw = (m as { content?: unknown }).content;
-    let contentStr = "";
-    if (typeof contentRaw === "string") contentStr = contentRaw;
-    else if (contentRaw !== undefined) {
-      try {
-        contentStr = JSON.stringify(contentRaw);
-      } catch {
-        contentStr = String(contentRaw);
-      }
-    }
-    if (role === "tool") {
-      if (contentStr.length > 400) contentStr = contentStr.slice(0, 400 - 1) + "…";
-    }
-    // Collapse newlines to single spaces so each message is one line.
-    contentStr = contentStr.replace(/\s+/g, " ").trim();
-    lines.push(`${role}: ${contentStr}`);
-  }
-
-  const serialized = lines.join("\n");
+  const serialized = serializeThread(messages);
   const prompt =
     "Summarize this coding-assistant conversation faithfully so work can continue seamlessly in a fresh thread. Preserve: key facts and decisions, file paths and code identifiers, what has been done, current state, and open tasks. Be concise but lose nothing load-bearing.\n\n" +
     serialized;
