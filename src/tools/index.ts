@@ -88,12 +88,69 @@ export async function gate(
     if (isFailure && ctx.memory) {
       try {
         const fp = fingerprintError(result as string);
-        ctx.memory.recordFailureEvent({
-          ts: new Date().toISOString(),
-          sessionId: ctx.sessionId,
-          fingerprint: fp,
-          errorText: (result as string).slice(0, 2000),
-        });
+        let finalOut = result as string;
+
+        // reconsolidation & recall + injection
+        try {
+          // 1. reconsolidation: if we injected earlier in this session, decrement confidence
+          const prior = ctx.memory.priorInjectionThisSession(ctx.sessionId, fp);
+          if (typeof prior === "number") {
+            try {
+              ctx.memory.decrementConfidence(prior);
+            } catch {
+              // swallow
+            }
+          }
+
+          // 2. recall by fingerprint, then by text fallback
+          let hit = ctx.memory.recallByFingerprint(fp);
+          if (!hit) {
+            const byText = ctx.memory.recallByText(result as string, "failure", 1);
+            if (byText && byText.length > 0) hit = byText[0];
+          }
+
+          // 3. if hit, augment finalOut and record recall event and touchUsed
+          if (hit) {
+            // append the memory injection visible to the model
+            finalOut = `${finalOut}\n[memory #${hit.id}] ${hit.body}`;
+            try {
+              ctx.memory.touchUsed(hit.id, new Date().toISOString());
+            } catch {
+              // swallow
+            }
+            try {
+              ctx.memory.recordRecallEvent({
+                ts: new Date().toISOString(),
+                sessionId: ctx.sessionId,
+                cueKind: "failure",
+                cueText: fp,
+                matchedIds: [hit.id],
+                injectedIds: [hit.id],
+              });
+            } catch {
+              // swallow
+            }
+          }
+
+          // finally, record the failure event with the injected_memory_id (if any)
+          try {
+            ctx.memory.recordFailureEvent({
+              ts: new Date().toISOString(),
+              sessionId: ctx.sessionId,
+              fingerprint: fp,
+              errorText: (result as string).slice(0, 2000),
+              injectedMemoryId: hit ? hit.id : undefined,
+            });
+          } catch {
+            // swallow
+          }
+
+        } catch {
+          // swallow any errors during reconsolidation/recall
+        }
+
+        // return the possibly augmented output
+        return finalOut;
       } catch {
         // swallow any errors from recording — logging must never break a tool
       }

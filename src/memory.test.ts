@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import Database from "better-sqlite3";
 import { fingerprintError, openMemoryStore } from "./memory.js";
+import type { MemoryRow } from "./memory.js";
 
 describe("memory store", () => {
   let wd = "";
@@ -70,5 +71,85 @@ describe("memory store", () => {
 
     store.close();
     db.close();
+  });
+
+  it("insertMemory dedupes and recallByFingerprint / demotion works", () => {
+    wd = mkdtempSync(join(tmpdir(), "cody-mem-"));
+    const dbPath = join(wd, "mem.db");
+    const store = openMemoryStore(dbPath);
+
+    const id1 = store.insertMemory({ kind: "failure", cue: "fp-123", triggerText: "ls failed", body: "lesson 1" });
+    expect(typeof id1).toBe("number");
+    const id2 = store.insertMemory({ kind: "failure", cue: "fp-123", triggerText: "ls failed again", body: "lesson 1" });
+    expect(id2).toBe(id1);
+
+    // recall returns the memory
+    const recalled = store.recallByFingerprint("fp-123");
+    expect(recalled).toBeDefined();
+    expect(recalled?.id).toBe(id1);
+
+    // demote to 0 confidence and ensure recall returns undefined
+    store.decrementConfidence(id1, 10);
+    const recalled2 = store.recallByFingerprint("fp-123");
+    expect(recalled2).toBeUndefined();
+
+    store.close();
+  });
+
+  it("recallByText finds by trigger_text or body and excludes demoted rows", () => {
+    wd = mkdtempSync(join(tmpdir(), "cody-mem-"));
+    const dbPath = join(wd, "mem.db");
+    const store = openMemoryStore(dbPath);
+
+    const id1 = store.insertMemory({ kind: "decision", cue: "topic-x", triggerText: "use foobar tool", body: "do this" });
+    const id2 = store.insertMemory({ kind: "decision", cue: "topic-y", triggerText: "use other", body: "use foobar sometimes" });
+
+    const res = store.recallByText("foobar", "decision", 5);
+    expect(res.length).toBeGreaterThanOrEqual(1);
+    const ids = res.map((r) => r.id);
+    expect(ids).toContain(id1);
+    expect(ids).toContain(id2);
+
+    // demote id1 and ensure it's excluded
+    store.decrementConfidence(id1, 10);
+    const res2 = store.recallByText("foobar", "decision", 5);
+    const ids2 = res2.map((r) => r.id);
+    expect(ids2).not.toContain(id1);
+
+    store.close();
+  });
+
+  it("recallByText multi-word FTS matches and regresses previous bug", () => {
+    wd = mkdtempSync(join(tmpdir(), "cody-mem-"));
+    const dbPath = join(wd, "mem.db");
+    const store = openMemoryStore(dbPath);
+
+    const id = store.insertMemory({ kind: "failure", cue: "fp-proxy", triggerText: "pnpm add timed out behind proxy", body: "pnpm add exceeds the 60s shell timeout behind the DKFZ proxy" });
+    // OR semantics: at least one matching token should recall the memory
+    const res = store.recallByText("proxy timeout", "failure", 5);
+    expect(res.length).toBeGreaterThanOrEqual(1);
+    const ids = res.map((r) => r.id);
+    expect(ids).toContain(id);
+
+    // a multi-word query with no shared terms should return []
+    const resNone = store.recallByText("kubernetes helm chart", "failure", 5);
+    expect(resNone.length).toBe(0);
+
+    store.close();
+  });
+
+  it("touchUsed increments uses", () => {
+    wd = mkdtempSync(join(tmpdir(), "cody-mem-"));
+    const dbPath = join(wd, "mem.db");
+    const store = openMemoryStore(dbPath);
+
+    const id = store.insertMemory({ kind: "milestone", cue: "m1", triggerText: "done", body: "completed" });
+    const before = store.listMemories().find((r) => r.id === id) as MemoryRow;
+    expect(before.uses).toBe(0);
+    store.touchUsed(id, new Date().toISOString());
+    const after = store.listMemories().find((r) => r.id === id) as MemoryRow;
+    expect(after.uses).toBeGreaterThanOrEqual(1);
+
+    store.close();
   });
 });

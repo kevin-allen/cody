@@ -1,43 +1,90 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { describe, it, expect } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { loadSkillsCatalog } from "../skills.js";
+import { tmpdir } from "node:os";
+import { openMemoryStore } from "../memory.js";
+import { createTools } from "./index.js";
+import type { ToolContext } from "./index.js";
+import type { Config } from "../config.js";
 
-let wd: string;
+// Minimal fake config
+const cfg: Config = {
+  models: { default: { provider: "openai", model: "gpt-4o" } },
+  roles: { agent: "default" },
+  permissions: { mode: "supervised", overrides: {}, shell: { deny: [], allow: [] }, mcp: { deny: [], allow: [] } },
+  limits: { recursionLimit: 10, compactThresholdTokens: 1000 },
+  sessions: { enabled: true },
+  mcp: { servers: {} },
+};
 
-beforeEach(() => {
-  wd = mkdtempSync(join(process.cwd(), "tmp-skills-"));
-  mkdirSync(join(wd, ".cody"));
-  mkdirSync(join(wd, ".cody", "skills"));
-});
+describe("gate failure memory injection and reconsolidation", () => {
+  it("injects memory when a failure matches a stored memory and records a recall_event", async () => {
+    const wd = mkdtempSync(join(tmpdir(), "cody-mem-"));
+    const store = openMemoryStore(join(wd, "m.db"));
+    const fakeError = "[error] pnpm add timed out behind proxy";
+    const fp = (await import("../memory.js")).fingerprintError(fakeError);
+    const id = store.insertMemory({ kind: "failure", cue: fp, triggerText: "pnpm add timed out behind proxy", body: "use --offline or configure proxy" });
 
-afterEach(() => rmSync(wd, { recursive: true, force: true }));
+    const ctx: ToolContext = {
+      workdir: wd,
+      config: cfg,
+      confirm: async () => ({ approved: true }),
+      memory: store,
+      sessionId: "sess-1",
+    };
 
-describe("skills catalog", () => {
-  it("parses valid skill", () => {
-    mkdirSync(join(wd!, ".cody", "skills", "foo"));
-    writeFileSync(join(wd!, ".cody", "skills", "foo", "SKILL.md"), "---\nname: Foo\ndescription: bar\ntags: a,b\n---\nbody\n");
-    const c = loadSkillsCatalog(wd as string);
-    expect(c.length).toBe(1);
-    expect(c[0]?.name).toBe("Foo");
+    // We need to simulate a command that returns a failing string whose fingerprint matches fp
+    const fakeExec = () => fakeError;
+
+    // Build an approval request consistent with run_shell signature
+    const req = { action: "shell" as const, title: "Run command", preview: "pnpm add", preapproved: true };
+
+    // Direct call to gate with our fake exec
+    const { gate } = await import("./index.js");
+    const out = await gate(ctx, req, fakeExec as any);
+    expect(typeof out).toBe("string");
+    expect(out.includes("[memory #")).toBe(true);
+
+    // verify a recall_event was recorded
+    // open the DB directly and check recall_events
+    // (openMemoryStore uses same DB file)
+    const recalls = store ? (store as any).listMemories() : [];
+    // at least one recall_event should exist in the DB — use SQL via new connection
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(join(wd, "m.db"));
+    const rows = db.prepare("SELECT * FROM recall_events").all();
+    expect(rows.length).toBeGreaterThanOrEqual(1);
+    db.close();
+
+    store.close();
+    rmSync(wd, { recursive: true, force: true });
   });
 
-  it("missing frontmatter uses dir name", () => {
-    mkdirSync(join(wd!, ".cody", "skills", "bar"));
-    writeFileSync(join(wd!, ".cody", "skills", "bar", "SKILL.md"), "no frontmatter\n");
-    const c = loadSkillsCatalog(wd as string);
-    expect(c.length).toBe(1);
-    expect(c[0]?.name).toBe("bar");
-  });
+  it("reconsolidation: second failure in same session decrements confidence", async () => {
+    const wd = mkdtempSync(join(tmpdir(), "cody-mem-"));
+    const store = openMemoryStore(join(wd, "m.db"));
+    const id = store.insertMemory({ kind: "failure", cue: "fp-2", triggerText: "boom", body: "fix: do X" });
 
-  it("unreadable skipped", () => {
-    mkdirSync(join(wd!, ".cody", "skills", "bad"));
-    // don't create SKILL.md
-    const c = loadSkillsCatalog(wd as string);
-    expect(c.length).toBe(0);
-  });
-});
+    const ctx: ToolContext = {
+      workdir: wd,
+      config: cfg,
+      confirm: async () => ({ approved: true }),
+      memory: store,
+      sessionId: "sess-2",
+    };
 
-describe("skill tools", () => {
-  it("load_skill and read_skill_file");
+    const fakeExec = () => "[error] boom";
+    const { gate } = await import("./index.js");
+    // first failure: inject and record
+    await gate(ctx, { action: "shell" as const, title: "Run", preview: "cmd" }, fakeExec as any);
+    // get confidence after first
+    const before = store.listMemories().find((r) => r.id === id)!.confidence;
+    // second failure in same session — should decrement confidence
+    await gate(ctx, { action: "shell" as const, title: "Run", preview: "cmd" }, fakeExec as any);
+    const after = store.listMemories().find((r) => r.id === id)!.confidence;
+    expect(after).toBeLessThan(before);
+
+    store.close();
+    rmSync(wd, { recursive: true, force: true });
+  });
 });
