@@ -109,6 +109,14 @@ function friendlyError(err: unknown): string {
 
 /** Build the LangChain tools for a given context, each wired through the gate. */
 export function createTools(ctx: ToolContext): StructuredToolInterface[] {
+  // Mutating-file lock: serialize write_file and edit_file across the prepare→gate→apply
+  // span so concurrent mutations don't race on TOCTOU (diff computed from stale content).
+  let fileChain: Promise<unknown> = Promise.resolve();
+  const withFileLock = <T>(fn: () => Promise<T>): Promise<T> => {
+    const p = fileChain.then(fn);
+    fileChain = p.then(() => undefined, () => undefined);
+    return p;
+  };
   const readFile = tool(
     ({ path }) =>
       gate(ctx, { action: "read", title: `Read ${path}`, preview: path }, () => {
@@ -174,12 +182,12 @@ export function createTools(ctx: ToolContext): StructuredToolInterface[] {
   );
 
   const writeFile = tool(
-    ({ path, content }) => {
+    ({ path, content }) => withFileLock(async () => {
       let change;
       try {
         change = prepareWrite(ctx.workdir, path, content);
       } catch (e) {
-        return Promise.resolve(friendlyError(e));
+        return friendlyError(e);
       }
       return gate(ctx, { action: "write", title: change.summary, preview: change.diff }, () => {
         try {
@@ -189,7 +197,7 @@ export function createTools(ctx: ToolContext): StructuredToolInterface[] {
           return friendlyError(e);
         }
       });
-    },
+    }),
     {
       name: "write_file",
       description: "Create or overwrite a file. Prompts for approval and shows a diff first.",
@@ -201,12 +209,12 @@ export function createTools(ctx: ToolContext): StructuredToolInterface[] {
   );
 
   const editFile = tool(
-    ({ path, old_string, new_string }) => {
+    ({ path, old_string, new_string }) => withFileLock(async () => {
       let change;
       try {
         change = prepareEdit(ctx.workdir, path, old_string, new_string);
       } catch (e) {
-        return Promise.resolve(friendlyError(e));
+        return friendlyError(e);
       }
       return gate(ctx, { action: "edit", title: change.summary, preview: change.diff }, () => {
         try {
@@ -216,7 +224,7 @@ export function createTools(ctx: ToolContext): StructuredToolInterface[] {
           return friendlyError(e);
         }
       });
-    },
+    }),
     {
       name: "edit_file",
       description:

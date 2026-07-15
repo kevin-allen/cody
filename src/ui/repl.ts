@@ -255,12 +255,22 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
 
   let sessionId: string | undefined;
 
+  // Serialize approval prompts so concurrent ask-gated calls don't fight over readline.
+  let confirmChain: Promise<unknown> = Promise.resolve();
+  const serializedConfirm = (confirmImpl: (req: ApprovalRequest) => Promise<ConfirmResult>) => {
+    return (req: ApprovalRequest): Promise<ConfirmResult> => {
+      const p = confirmChain.then(() => confirmImpl(req));
+      confirmChain = p.then(() => undefined, () => undefined); // keep chain alive on denial/error
+      return p;
+    };
+  };
+
   const ctx = {
     workdir: deps.cwd,
     get config() {
       return liveConfig;
     },
-    confirm,
+    confirm: serializedConfirm(confirm),
     memory,
     get sessionId() {
       return sessionId;

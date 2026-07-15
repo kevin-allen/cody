@@ -1,6 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { SYSTEM_PROMPT, withMcpServers, withMemories } from "./prompt.js";
 
+describe("SYSTEM_PROMPT", () => {
+  it("contains the parallel-tool-calls discipline line (FR-58)", () => {
+    expect(SYSTEM_PROMPT).toContain("When tool calls are independent");
+    expect(SYSTEM_PROMPT).toContain("issue them together in a single response so they run in parallel");
+    expect(SYSTEM_PROMPT).toContain("keep dependent calls sequential");
+  });
+});
+
 describe("withMcpServers (FR-44a)", () => {
   it("returns the base prompt unchanged for an empty list", () => {
     expect(withMcpServers(SYSTEM_PROMPT, [])).toBe(SYSTEM_PROMPT);
