@@ -1,6 +1,10 @@
-import { describe, it, expect } from "vitest";
-import { consolidate, reviewProvisional } from "./consolidate.js";
+import { describe, it, expect, afterEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { consolidate, reviewProvisional, reviewSessionProvisional, findOrphanedSessions } from "./consolidate.js";
 import type { ConsolidationRecord } from "./consolidate.js";
+import { openMemoryStore } from "./memory.js";
 
 class FakeModelOK {
   constructor(private readonly out: string) {}
@@ -113,5 +117,122 @@ describe("reviewProvisional", () => {
     ]);
     expect(res.length).toBe(1);
     expect(res[0]).toEqual({ index: 0, verdict: "confirmed" });
+  });
+});
+
+describe("findOrphanedSessions / reviewSessionProvisional (orphaned provisional memory sweep)", () => {
+  let wd = "";
+  afterEach(() => {
+    if (wd) {
+      try {
+        rmSync(wd, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+    }
+    wd = "";
+  });
+
+  it("findOrphanedSessions returns distinct sourceSessions other than the current one, ignoring unattributed memories", () => {
+    wd = mkdtempSync(join(tmpdir(), "cody-consolidate-"));
+    const store = openMemoryStore(join(wd, "mem.db"));
+
+    store.insertMemory({ kind: "decision", cue: "a", body: "from session A", status: "provisional", sourceSession: "A" });
+    store.insertMemory({ kind: "failure", cue: "a2", body: "also from A", status: "provisional", sourceSession: "A" });
+    store.insertMemory({ kind: "milestone", cue: "b", body: "from session B", status: "provisional", sourceSession: "B" });
+    store.insertMemory({ kind: "decision", cue: "c", body: "from the current session", status: "provisional", sourceSession: "CURRENT" });
+    store.insertMemory({ kind: "decision", cue: "d", body: "no source session at all", status: "provisional" });
+    store.insertMemory({ kind: "decision", cue: "e", body: "active, not provisional", status: "active", sourceSession: "Z" });
+
+    const orphans = findOrphanedSessions(store, "CURRENT");
+    expect(orphans.sort()).toEqual(["A", "B"]);
+
+    store.close();
+  });
+
+  it("findOrphanedSessions returns everything provisional when there is no current session", () => {
+    wd = mkdtempSync(join(tmpdir(), "cody-consolidate-"));
+    const store = openMemoryStore(join(wd, "mem.db"));
+    store.insertMemory({ kind: "decision", cue: "a", body: "from A", status: "provisional", sourceSession: "A" });
+    const orphans = findOrphanedSessions(store, undefined);
+    expect(orphans).toEqual(["A"]);
+    store.close();
+  });
+
+  it("reviewSessionProvisional promotes confirmed and prunes the rest, using the recovered transcript", async () => {
+    wd = mkdtempSync(join(tmpdir(), "cody-consolidate-"));
+    const store = openMemoryStore(join(wd, "mem.db"));
+
+    const idConfirmed = store.insertMemory({
+      kind: "decision",
+      cue: "confirmed-one",
+      body: "this one was confirmed",
+      status: "provisional",
+      sourceSession: "orphan-1",
+    });
+    const idWrong = store.insertMemory({
+      kind: "decision",
+      cue: "wrong-one",
+      body: "this one was wrong",
+      status: "provisional",
+      sourceSession: "orphan-1",
+    });
+    // belongs to a different orphaned session; must be untouched by this call
+    const idOther = store.insertMemory({
+      kind: "decision",
+      cue: "other-session",
+      body: "belongs to a different session",
+      status: "provisional",
+      sourceSession: "orphan-2",
+    });
+
+    // reviewSessionProvisional passes items in store.listProvisional() order
+    // (newest id first) filtered to this session — mirror that ordering here
+    // rather than assuming insertion order.
+    const order = store.listProvisional().filter((m) => m.sourceSession === "orphan-1");
+    expect(order.map((m) => m.id)).toEqual([idWrong, idConfirmed]);
+    const out = JSON.stringify([
+      { index: order.findIndex((m) => m.id === idConfirmed), verdict: "confirmed" },
+      { index: order.findIndex((m) => m.id === idWrong), verdict: "wrong" },
+    ]);
+    const model = new FakeModelOK(out) as any;
+
+    const result = await reviewSessionProvisional(store, model, "orphan-1", async () => "recovered transcript text");
+    expect(result).toEqual({ promoted: 1, pruned: 1 });
+
+    const confirmedRow = store.listMemories().find((m) => m.id === idConfirmed);
+    expect(confirmedRow?.status).toBe("active");
+    expect(store.listMemories().find((m) => m.id === idWrong)).toBeUndefined();
+    expect(store.listProvisional().map((m) => m.id)).toContain(idOther);
+
+    store.close();
+  });
+
+  it("reviewSessionProvisional is a no-op when there's nothing provisional for that session", async () => {
+    wd = mkdtempSync(join(tmpdir(), "cody-consolidate-"));
+    const store = openMemoryStore(join(wd, "mem.db"));
+    const model = new FakeModelOK("[]") as any;
+    const result = await reviewSessionProvisional(store, model, "nobody", async () => "irrelevant");
+    expect(result).toEqual({ promoted: 0, pruned: 0 });
+    store.close();
+  });
+
+  it("reviewSessionProvisional leaves memories untouched when the transcript can't be recovered", async () => {
+    wd = mkdtempSync(join(tmpdir(), "cody-consolidate-"));
+    const store = openMemoryStore(join(wd, "mem.db"));
+    const id = store.insertMemory({
+      kind: "decision",
+      cue: "stuck",
+      body: "checkpoint is gone",
+      status: "provisional",
+      sourceSession: "gone",
+    });
+    const model = new FakeModelOK(JSON.stringify([{ index: 0, verdict: "confirmed" }])) as any;
+
+    // getTranscript resolves to undefined, simulating a pruned/missing checkpoint
+    const result = await reviewSessionProvisional(store, model, "gone", async () => undefined);
+    expect(result).toEqual({ promoted: 0, pruned: 0 });
+    expect(store.listProvisional().map((m) => m.id)).toContain(id);
+    store.close();
   });
 });

@@ -19,7 +19,7 @@ import { createTools, createGatedMcpTools } from "../tools/index.js";
 import type { ApprovalRequest, ConfirmResult } from "../tools/index.js";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createAgent, streamAgentEvents, repairDanglingToolCalls, compactThread, serializeThread } from "../agent/graph.js";
-import { consolidate, reviewProvisional } from "../consolidate.js";
+import { consolidate, reviewSessionProvisional, findOrphanedSessions } from "../consolidate.js";
 import type { UsageTotals } from "../agent/graph.js";
 import type { SessionStore } from "../sessions.js";
 import { resolveSessionRef } from "../sessions.js";
@@ -273,6 +273,20 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
   ];
 
   const agent = createAgent({ model, tools, checkpointer: saver, systemPrompt, memory, sessionId: () => sessionId });
+
+  // Recover a session's transcript from its own checkpointed state, for
+  // reviewing PROVISIONAL memories it left behind (see reviewSessionProvisional).
+  // Returns undefined if there's too little history or the checkpoint is gone.
+  async function getSessionTranscript(id: string): Promise<string | undefined> {
+    try {
+      const state = await agent.getState({ configurable: { thread_id: id } });
+      const messages = (state.values as { messages?: import("@langchain/core/messages").BaseMessage[] }).messages ?? [];
+      if (messages.length < 3) return undefined;
+      return serializeThread(messages);
+    } catch {
+      return undefined;
+    }
+  }
   // undefined = sessions not used; null = awaiting first input; string = already set to first input consumed? We'll store first input value separately.
   let sessionFirstInputValue: string | null | undefined = undefined;
   // capture the initial user request for auto-title generation; persists for the session
@@ -295,6 +309,32 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     }
     // mark that we are awaiting the first input value
     sessionFirstInputValue = null;
+  }
+
+  // Best-effort startup orphan sweep: a session that is killed, crashes, or is
+  // restarted before it reaches /compact or a clean exit otherwise leaves its
+  // PROVISIONAL memories unreviewed forever — they were only ever reviewed at
+  // those two boundaries, scoped to their own session. Each new session sweeps
+  // any OTHER session's leftover provisional memories, using that session's
+  // own persisted checkpoint transcript, so they eventually get promoted or
+  // pruned instead of accumulating. Runs in the background (fire-and-forget):
+  // never blocks the prompt, and a sweep that can't recover a transcript just
+  // leaves those memories for the next sweep to retry.
+  if (store && memory) {
+    const mem = memory;
+    const orphanSessionIds = findOrphanedSessions(mem, sessionId);
+    if (orphanSessionIds.length > 0) {
+      void (async () => {
+        try {
+          const reviewModel = getModel(deps.config, "memory");
+          for (const sid of orphanSessionIds) {
+            await reviewSessionProvisional(mem, reviewModel, sid, getSessionTranscript).catch(() => undefined);
+          }
+        } catch {
+          // best-effort
+        }
+      })();
+    }
   }
 
   let threadId = sessionId ? sessionId : "repl-0";
@@ -514,35 +554,12 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
       // Review this session's PROVISIONAL memories against the transcript and
       // promote confirmed ones / prune the rest. Best-effort — never breaks compaction/exit.
       try {
-        const provisional = memory.listProvisional().filter((m) => m.sourceSession === id);
-        if (provisional.length > 0) {
-          const verdicts = await reviewProvisional(
-            model,
-            transcript,
-            provisional.map((m, i) => ({ index: i, body: m.body })),
+        // reuse the transcript already fetched above instead of refetching state
+        const { promoted, pruned } = await reviewSessionProvisional(memory, model, id, async () => transcript);
+        if (promoted > 0 || pruned > 0) {
+          process.stdout.write(
+            p.dim(`(reviewed ${promoted + pruned} provisional memories: ${promoted} promoted, ${pruned} pruned)\n`),
           );
-          let promoted = 0;
-          let pruned = 0;
-          for (const v of verdicts) {
-            if (v.index < 0 || v.index >= provisional.length) continue;
-            const target = provisional[v.index]!;
-            try {
-              if (v.verdict === "confirmed") {
-                memory.promoteMemory(target.id);
-                promoted += 1;
-              } else {
-                memory.pruneProvisional(target.id);
-                pruned += 1;
-              }
-            } catch {
-              // continue
-            }
-          }
-          if (promoted > 0 || pruned > 0) {
-            process.stdout.write(
-              p.dim(`(reviewed ${promoted + pruned} provisional memories: ${promoted} promoted, ${pruned} pruned)\n`),
-            );
-          }
         }
       } catch {
         // swallow

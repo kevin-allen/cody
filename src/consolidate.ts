@@ -1,5 +1,6 @@
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { HumanMessage } from "@langchain/core/messages";
+import type { MemoryStore } from "./memory.js";
 
 export type ConsolidationRecord = {
   kind: "failure" | "decision" | "milestone";
@@ -108,4 +109,75 @@ export async function reviewProvisional(
   } catch {
     return [];
   }
+}
+
+/**
+ * Review one session's PROVISIONAL memories against its transcript and apply
+ * the verdicts (promote confirmed ones, prune the rest). Shared by the normal
+ * end-of-session consolidation path (manual/auto /compact, clean REPL exit)
+ * and the startup "orphan sweep" (see `findOrphanedSessions`) that recovers
+ * provisional memories left behind by a session that was killed, crashed, or
+ * restarted before it ever reached that boundary.
+ *
+ * `getTranscript` should resolve to `undefined` when the session has too
+ * little history to review meaningfully, or its transcript can no longer be
+ * recovered (e.g. checkpoints were pruned) — in that case the provisional
+ * memories are left untouched so a later sweep can retry them.
+ */
+export async function reviewSessionProvisional(
+  memory: MemoryStore,
+  model: BaseChatModel,
+  sessionId: string,
+  getTranscript: (sessionId: string) => Promise<string | undefined>,
+): Promise<{ promoted: number; pruned: number }> {
+  const provisional = memory.listProvisional().filter((m) => m.sourceSession === sessionId);
+  if (provisional.length === 0) return { promoted: 0, pruned: 0 };
+
+  let transcript: string | undefined;
+  try {
+    transcript = await getTranscript(sessionId);
+  } catch {
+    transcript = undefined;
+  }
+  if (!transcript) return { promoted: 0, pruned: 0 };
+
+  const verdicts = await reviewProvisional(
+    model,
+    transcript,
+    provisional.map((m, i) => ({ index: i, body: m.body })),
+  ).catch(() => []);
+
+  let promoted = 0;
+  let pruned = 0;
+  for (const v of verdicts) {
+    if (v.index < 0 || v.index >= provisional.length) continue;
+    const target = provisional[v.index]!;
+    try {
+      if (v.verdict === "confirmed") {
+        memory.promoteMemory(target.id);
+        promoted += 1;
+      } else {
+        memory.pruneProvisional(target.id);
+        pruned += 1;
+      }
+    } catch {
+      // continue
+    }
+  }
+  return { promoted, pruned };
+}
+
+/**
+ * Distinct sourceSession ids among current PROVISIONAL memories that do not
+ * belong to `currentSessionId` — i.e. left behind by some other (necessarily
+ * prior, since a session id is fresh per REPL start unless resumed) session.
+ * A memory with no sourceSession can't be attributed to any recoverable
+ * transcript, so it is not considered an orphan here.
+ */
+export function findOrphanedSessions(memory: MemoryStore, currentSessionId: string | undefined): string[] {
+  const ids = new Set<string>();
+  for (const m of memory.listProvisional()) {
+    if (m.sourceSession && m.sourceSession !== currentSessionId) ids.add(m.sourceSession);
+  }
+  return [...ids];
 }
