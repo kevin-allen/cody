@@ -254,12 +254,6 @@ export function openMemoryStore(dbPath: string): MemoryStore {
     return mapRowToMemoryRow(row);
   }
 
-  function sanitizeFtsQuery(q: string) {
-    if (!q) return "";
-    // remove double quotes and some special characters
-    return q.replace(/["'()*:+\-]/g, " ").trim();
-  }
-
   const STOPWORDS = new Set([
     "the",
     "a",
@@ -339,23 +333,25 @@ export function openMemoryStore(dbPath: string): MemoryStore {
   ]);
 
   function recallByTextImpl(text: string, kind?: string, limit = 3, currentSession?: string) {
-    const q = sanitizeFtsQuery(text);
-    if (!q) return [];
-    // tokenise and filter stopwords/short tokens
-    const rawWords = q.split(/\s+/).filter(Boolean);
-    const words = rawWords
-      .map((w) => w.toLowerCase())
+    // Extract alphanumeric + underscore tokens directly from the raw input.
+    // This avoids FTS5 syntax errors caused by punctuation (?, ., !, etc.)
+    // that the old sanitize-then-split pipeline left behind. Every token is
+    // later double-quoted so it is always a valid FTS5 term.
+    const rawTokens = text.toLowerCase().match(/[a-z0-9_]+/g) ?? [];
+    const words = rawTokens
       .filter((w) => w.length >= 3 && !STOPWORDS.has(w));
     if (words.length === 0) return [];
 
-    // prefer FTS match; fallback to LIKE only if FTS is unavailable (throws)
+    // Cap at 16 filtered tokens to guard against pathological inputs.
+    const capped = words.slice(0, 16);
+
+    // Prefer FTS match; fallback to LIKE only if FTS is genuinely unavailable.
     let rows: any[] = [];
     try {
-      // Use OR semantics so any query token can match; ranking by bm25 brings best matches first
-      const matchQ = words.map((w) => `${w}`).join(" OR ");
+      // Every token is double-quoted so nothing can be a syntax error.
+      const matchQ = capped.map((w) => `"${w}"`).join(" OR ");
       const statusClause = `(m.status = 'active' OR m.status IS NULL OR (m.status = 'provisional' AND m.source_session = ?))`;
       if (kind) {
-        // reference the FTS table by name (memories_fts) — MATCH does not accept table aliases
         rows = db
           .prepare(
             `SELECT m.* FROM memories m JOIN memories_fts ON memories_fts.rowid = m.id WHERE m.confidence > 0 AND m.kind = ? AND ${statusClause} AND memories_fts MATCH ? ORDER BY bm25(memories_fts), m.confidence DESC, (m.last_used IS NOT NULL) DESC, m.last_used DESC, m.id DESC LIMIT ?`,
@@ -369,10 +365,18 @@ export function openMemoryStore(dbPath: string): MemoryStore {
           .all(currentSession ?? null, matchQ, limit);
       }
     } catch (e) {
-      // FTS not available -> fall back to LIKE (word-wise OR) search
-      const likeClauses = words.map(() => `(trigger_text LIKE ? OR body LIKE ? )`).join(" OR ");
+      // Fall back to LIKE only when FTS5 is genuinely unavailable (e.g. the
+      // virtual table could not be created at schema setup time). Any other
+      // error (syntax error, query bug) must not be silently swallowed — return
+      // [] so the defect is visible rather than masked by stale LIKE results.
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!msg.includes("no such table") && !msg.includes("no such module")) {
+        return [];
+      }
+
+      const likeClauses = capped.map(() => `(trigger_text LIKE ? OR body LIKE ? )`).join(" OR ");
       const params: any[] = [];
-      for (const w of words) {
+      for (const w of capped) {
         const like = `%${w}%`;
         params.push(like, like);
       }

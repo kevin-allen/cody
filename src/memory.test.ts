@@ -359,6 +359,194 @@ describe("memory store", () => {
     store.close();
   });
 
+  it("recallByText ranks canary memory first despite noise words and punctuation (regression)", () => {
+    wd = mkdtempSync(join(tmpdir(), "cody-mem-"));
+    const dbPath = join(wd, "mem.db");
+    const store = openMemoryStore(dbPath);
+
+    // The canary memory: distinctive body, low confidence
+    const idCanary = store.insertMemory({
+      kind: "decision",
+      cue: "headless-probe-canary",
+      triggerText: "headless probe color",
+      body: "the canary color is chartreuse",
+      confidence: 1,
+    });
+
+    // Several noisy memories with higher confidence and recent last_used,
+    // themed around recall/tools topics to simulate the noisy neighbor case.
+    const idNoisy1 = store.insertMemory({
+      kind: "decision",
+      cue: "noisy-1",
+      triggerText: "recall ranking design",
+      body: "Use SQLite FTS5 for memory recall with OR semantics, bm25 ranking, and a stopword filter.",
+      confidence: 10,
+    });
+    store.touchUsed(idNoisy1, new Date().toISOString());
+
+    const idNoisy2 = store.insertMemory({
+      kind: "decision",
+      cue: "noisy-2",
+      triggerText: "tools design",
+      body: "Tools should be stateless and idempotent whenever possible.",
+      confidence: 9,
+    });
+    store.touchUsed(idNoisy2, new Date().toISOString());
+
+    const idNoisy3 = store.insertMemory({
+      kind: "decision",
+      cue: "noisy-3",
+      triggerText: "recall session scope",
+      body: "When adding session-scoped visibility to recall queries, use filter status=active OR ...",
+      confidence: 8,
+    });
+    store.touchUsed(idNoisy3, new Date().toISOString());
+
+    // Query with noisy punctuation — the exact kind that caused the old bug.
+    const res = store.recallByText(
+      "What is the canary color? Answer from remembered context only; do not use any tools.",
+      "decision",
+      5,
+    );
+
+    expect(res.length).toBeGreaterThanOrEqual(1);
+    // The canary memory must be ranked FIRST under bm25.
+    expect(res[0]!.id).toBe(idCanary);
+
+    store.close();
+  });
+
+  it("punctuation in queries does not cause silent LIKE fallback", () => {
+    wd = mkdtempSync(join(tmpdir(), "cody-mem-"));
+    const dbPath = join(wd, "mem.db");
+    const store = openMemoryStore(dbPath);
+
+    // Seed a memory whose distinguishing content is only matchable via
+    // a token shorter than 3 chars (i.e. a substring like "xy" inside
+    // a longer word).  The LIKE branch could find it via %xy%, but the
+    // FTS branch cannot because short tokens are filtered.  If we see
+    // it in results, it means the LIKE branch was hit.
+    const idLike = store.insertMemory({
+      kind: "decision",
+      cue: "like-only",
+      triggerText: "xyzzy plugh",
+      body: "xy inside body should not match FTS",
+      confidence: 5,
+    });
+
+    // Seed a normal FTS-matchable memory with distinctive word.
+    const idFts = store.insertMemory({
+      kind: "decision",
+      cue: "fts-match",
+      triggerText: "tokyo banana smoothie",
+      body: "This memory talks about a tokyo smoothie recipe.",
+      confidence: 5,
+    });
+
+    // Queries with ?, ., !, ;, ,, ", parentheses, and fts5-like operators.
+    const punctQueries = [
+      'What about "smoothie"? And banana! Yes.',
+      "smoothie (banana) and more; also, check this.",
+      "banana? smoothie. tokyo!",
+      "NEAR( smoothie banana",
+      "col: tokyo smoothie",
+    ];
+
+    for (const q of punctQueries) {
+      const res = store.recallByText(q, "decision", 10);
+      // Should not crash; should find the FTS-matchable memory.
+      const ids = res.map((r) => r.id);
+      expect(ids).toContain(idFts);
+      // Must NOT include the LIKE-only memory — proving we stayed on FTS.
+      expect(ids).not.toContain(idLike);
+    }
+
+    store.close();
+  });
+
+  it("FTS keywords as lowercase words do not break queries", () => {
+    wd = mkdtempSync(join(tmpdir(), "cody-mem-"));
+    const dbPath = join(wd, "mem.db");
+    const store = openMemoryStore(dbPath);
+
+    // "or", "and", "not" are <=2 chars -> filtered as stopwords/short, so
+    // they have no effect on semantics.  They must not cause errors.
+    const id = store.insertMemory({
+      kind: "decision",
+      cue: "keyword-test",
+      triggerText: "oranges and lemons not grapefruit",
+      body: "We discussed citrus fruits.",
+      confidence: 5,
+    });
+
+    // Keyword words are short, so they won't match anything themselves.
+    // But the query must not error, and the other tokens ("oranges", etc.)
+    // must still work.  "oranges" contains "or" as sub-prefix but is >2 chars.
+    const res = store.recallByText("or and not", "decision", 5);
+    // "or", "and", "not" are all <=2 chars; expect no results.
+    expect(res.length).toBe(0);
+
+    // With a real token "citrus", it should find the memory.
+    const res2 = store.recallByText("citrus or and not fruit", "decision", 5);
+    const ids = res2.map((r) => r.id);
+    expect(ids).toContain(id);
+
+    store.close();
+  });
+
+  it("token cap prevents errors on long inputs", () => {
+    wd = mkdtempSync(join(tmpdir(), "cody-mem-"));
+    const dbPath = join(wd, "mem.db");
+    const store = openMemoryStore(dbPath);
+
+    // >16 distinct valid tokens (>2 chars, non-stopword)
+    const manyTokens = Array.from({ length: 20 }, (_, i) => `token${i}`).join(" ");
+    const id = store.insertMemory({
+      kind: "decision",
+      cue: "cap-test",
+      triggerText: "token0 token1 token2",
+      body: "Test memory for token cap.",
+      confidence: 5,
+    });
+
+    // Should not throw.
+    const res = store.recallByText(manyTokens, "decision", 10);
+    expect(Array.isArray(res)).toBe(true);
+    // The first 16 tokens include token0, token1, token2 -> should find it.
+    const ids = res.map((r) => r.id);
+    expect(ids).toContain(id);
+
+    store.close();
+  });
+
+  it("LIKE fallback works when FTS table is absent", () => {
+    wd = mkdtempSync(join(tmpdir(), "cody-mem-"));
+    const dbPath = join(wd, "mem.db");
+    const store = openMemoryStore(dbPath);
+
+    const id = store.insertMemory({
+      kind: "decision",
+      cue: "fallback-test",
+      triggerText: "alpha beta gamma",
+      body: "Testing fallback path.",
+      confidence: 5,
+    });
+
+    // Manually drop the FTS table on the underlying DB to simulate
+    // an environment where FTS5 could not be created.
+    const rawDb = new Database(dbPath);
+    rawDb.prepare("DROP TABLE IF EXISTS memories_fts").run();
+    rawDb.close();
+
+    // recallByText must still return results via LIKE fallback.
+    const res = store.recallByText("alpha gamma", "decision", 5);
+    expect(res.length).toBeGreaterThanOrEqual(1);
+    const ids = res.map((r) => r.id);
+    expect(ids).toContain(id);
+
+    store.close();
+  });
+
   it("formatMemoryBreakdown renders grouped lines and handles the empty case", () => {
     const rendered = formatMemoryBreakdown([
       { origin: "consolidated", status: "active", count: 3, recalled: 2 },
