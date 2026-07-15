@@ -157,6 +157,16 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     prompt: promptStr,
     terminal: isTTY,
   });
+  // Readline starts emitting "line"/"close" immediately, but our handlers are
+  // attached only after async setup below. With piped stdin, input arriving in
+  // that window would be emitted with no listener and silently lost — and an
+  // early EOF's "close" would be missed entirely, hanging shutdown. Pause now;
+  // resume right before the first prompt, once handlers are attached.
+  rl.pause();
+  let rlClosed = false;
+  rl.on("close", () => {
+    rlClosed = true;
+  });
 
   // Route the next typed line either to a pending approval prompt or the turn handler.
   let pendingAnswer: ((line: string) => void) | null = null;
@@ -815,9 +825,16 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     dispatch(input);
   });
 
+  rl.resume();
   rl.prompt();
 
-  await new Promise<void>((resolve) => rl.on("close", () => resolve()));
+  if (!rlClosed) await new Promise<void>((resolve) => rl.on("close", () => resolve()));
+  // Stdin EOF (e.g. piped input) can close readline while a turn is still
+  // streaming or inputs are queued — finish that work before shutting down,
+  // so `printf 'task\n' | cody` gets its answer instead of being cut off.
+  while (busy || queuedInputs.length > 0) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
   cleanupTerminal();
   process.stdout.write(p.dim("\nbye\n"));
 

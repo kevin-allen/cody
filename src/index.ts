@@ -395,6 +395,14 @@ async function main(): Promise<void> {
     if (store) store.close();
     if (mcp) await mcp.close();
   });
+
+  // Everything is shut down, but the event loop can still be held alive —
+  // most notably by piped stdin (readline.close() does not destroy the
+  // underlying stream, and a pipe whose writer stays open keeps it readable
+  // forever) and by keep-alive sockets. Without this, `/exit` or stdin EOF
+  // prints "bye" and the process lingers as a zombie. Flush stdout, then exit.
+  await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));
+  process.exit(process.exitCode ?? 0);
 }
 
 main().catch((err: unknown) => {
