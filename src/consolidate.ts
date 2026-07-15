@@ -181,3 +181,54 @@ export function findOrphanedSessions(memory: MemoryStore, currentSessionId: stri
   }
   return [...ids];
 }
+
+/**
+ * Consolidate a transcript and review its provisional memories in one call.
+ * Shared by the REPL end-of-session path and the headless run path.
+ *
+ * - Calls `consolidate(model, transcript)`, inserts each returned record (status
+ *   "active", origin "consolidated", sourceSession = sessionId — matching the
+ *   REPL's existing insert exactly).
+ * - Then calls `reviewSessionProvisional` to promote confirmed / prune
+ *   unconfirmed provisional memories from the same session.
+ * - Returns the counts; never throws (best-effort, returns {0,0,0} on failure).
+ */
+export async function consolidateTranscript(
+  memory: MemoryStore,
+  model: BaseChatModel,
+  sessionId: string,
+  transcript: string,
+): Promise<{ inserted: number; promoted: number; pruned: number }> {
+  try {
+    const records = await consolidate(model, transcript).catch(() => []);
+    let inserted = 0;
+    for (const r of records) {
+      try {
+        memory.insertMemory({
+          kind: r.kind,
+          cue: r.cue ?? "",
+          triggerText: r.triggerText,
+          body: r.body,
+          scope: r.scope,
+          confidence: r.confidence ?? 1,
+          sourceSession: sessionId,
+        });
+        inserted += 1;
+      } catch {
+        // continue
+      }
+    }
+    let promoted = 0;
+    let pruned = 0;
+    try {
+      const result = await reviewSessionProvisional(memory, model, sessionId, async () => transcript);
+      promoted = result.promoted;
+      pruned = result.pruned;
+    } catch {
+      // swallow
+    }
+    return { inserted, promoted, pruned };
+  } catch {
+    return { inserted: 0, promoted: 0, pruned: 0 };
+  }
+}

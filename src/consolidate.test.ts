@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { consolidate, reviewProvisional, reviewSessionProvisional, findOrphanedSessions } from "./consolidate.js";
+import { consolidate, reviewProvisional, reviewSessionProvisional, consolidateTranscript, findOrphanedSessions } from "./consolidate.js";
 import type { ConsolidationRecord } from "./consolidate.js";
 import { openMemoryStore } from "./memory.js";
 
@@ -16,6 +16,16 @@ class FakeModelOK {
 class FakeModelThrows {
   async invoke(_msgs: any) {
     throw new Error("nope");
+  }
+}
+
+/** Returns a different output on each call; after exhausting outputs returns "[]". */
+class FakeModelMulti {
+  private calls = 0;
+  constructor(private readonly outputs: string[]) {}
+  async invoke(_msgs: any) {
+    const idx = this.calls++;
+    return { content: idx < this.outputs.length ? this.outputs[idx]! : "[]" };
   }
 }
 
@@ -234,5 +244,107 @@ describe("findOrphanedSessions / reviewSessionProvisional (orphaned provisional 
     expect(result).toEqual({ promoted: 0, pruned: 0 });
     expect(store.listProvisional().map((m) => m.id)).toContain(id);
     store.close();
+  });
+});
+
+describe("consolidateTranscript", () => {
+  let wd = "";
+  afterEach(() => {
+    if (wd) {
+      try {
+        rmSync(wd, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+    }
+    wd = "";
+  });
+
+  it("inserts records with origin consolidated and sourceSession set, reviews provisionals, returns correct counts", async () => {
+    wd = mkdtempSync(join(tmpdir(), "cody-consolidate-"));
+    const store = openMemoryStore(join(wd, "mem.db"));
+
+    // Pre-insert a provisional memory for the same session
+    const provisionalId = store.insertMemory({
+      kind: "decision",
+      cue: "provisional-note",
+      body: "this should be reviewed",
+      status: "provisional",
+      sourceSession: "test-session",
+    });
+
+    // Model returns one consolidated record on the first call (consolidate),
+    // then a verdict confirming the provisional on the second call (reviewProvisional).
+    // listProvisional returns ORDER BY id DESC, so the provisional we just inserted
+    // (highest id) will be at index 0.
+    const out1 = JSON.stringify([
+      { kind: "decision", cue: "learned", triggerText: "x", body: "something learned", confidence: 1 },
+    ]);
+    const out2 = JSON.stringify([
+      { index: 0, verdict: "confirmed" },
+    ]);
+    const model = new FakeModelMulti([out1, out2]) as any;
+
+    const result = await consolidateTranscript(store, model, "test-session", "transcript contents");
+
+    expect(result.inserted).toBe(1);
+    expect(result.promoted).toBe(1);
+    expect(result.pruned).toBe(0);
+
+    // The inserted record should be active with origin "consolidated" and sourceSession set
+    const all = store.listMemories();
+    const inserted = all.find((m) => m.cue === "learned");
+    expect(inserted).toBeTruthy();
+    expect(inserted!.sourceSession).toBe("test-session");
+    expect(inserted!.origin).toBe("consolidated");
+    expect(inserted!.status).toBe("active");
+
+    // The provisional should now be active (promoted)
+    const promoted = all.find((m) => m.id === provisionalId);
+    expect(promoted?.status).toBe("active");
+
+    store.close();
+  });
+
+  it("returns {0,0,0} when the model throws, leaving memory intact", async () => {
+    wd = mkdtempSync(join(tmpdir(), "cody-consolidate-"));
+    const store = openMemoryStore(join(wd, "mem.db"));
+
+    // Pre-insert a provisional memory
+    const provisionalId = store.insertMemory({
+      kind: "decision",
+      cue: "survives",
+      body: "should not be touched",
+      status: "provisional",
+      sourceSession: "test-session",
+    });
+
+    const model = new FakeModelThrows() as any;
+    const result = await consolidateTranscript(store, model, "test-session", "transcript");
+
+    expect(result).toEqual({ inserted: 0, promoted: 0, pruned: 0 });
+
+    // The provisional memory should still exist untouched
+    const prov = store.listProvisional();
+    expect(prov.map((m) => m.id)).toContain(provisionalId);
+
+    store.close();
+  });
+
+  it("returns {0,0,0} when memory store throws on insert", async () => {
+    // Use a real store but close it to force insert errors
+    wd = mkdtempSync(join(tmpdir(), "cody-consolidate-"));
+    const store = openMemoryStore(join(wd, "mem.db"));
+
+    const out1 = JSON.stringify([
+      { kind: "decision", cue: "doomed", body: "will fail to insert", confidence: 1 },
+    ]);
+    const model = new FakeModelOK(out1) as any;
+
+    // Close the store before calling so insertMemory throws
+    store.close();
+
+    const result = await consolidateTranscript(store, model, "test-session", "transcript");
+    expect(result).toEqual({ inserted: 0, promoted: 0, pruned: 0 });
   });
 });

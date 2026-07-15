@@ -7,7 +7,9 @@ import { loadConfig, modelDefForRole } from "./config.js";
 import { getModel, assertToolCapable } from "./providers/factory.js";
 import { TOOL_INFO, resolvePolicy, createTools } from "./tools/index.js";
 import type { ApprovalRequest, ConfirmResult } from "./tools/index.js";
-import { createAgent, streamAgentText } from "./agent/graph.js";
+import { createAgent, streamAgentText, serializeThread } from "./agent/graph.js";
+import { MemorySaver } from "@langchain/langgraph";
+import { consolidateTranscript } from "./consolidate.js";
 import { createSubagentTool } from "./agent/subagent.js";
 import { configureProxyFromEnv, relaxTlsVerification } from "./net/proxy.js";
 import { startRepl } from "./ui/repl.js";
@@ -99,7 +101,30 @@ async function main(): Promise<void> {
       process.stderr.write(`warning: failed to connect to MCP servers: ${(err as Error).message}\n`);
     }
 
-    const baseCtx = { workdir: process.cwd(), config, confirm } as unknown as import("./tools/index.js").ToolContext;
+    // Open memory store best-effort; on failure proceed without it.
+    let memory: ReturnType<typeof openMemoryStore> | undefined = undefined;
+    try {
+      memory = openMemoryStore(join(process.cwd(), ".cody", "memory.db"));
+    } catch {
+      try { process.stderr.write(makePalette(colorEnabled()).dim("(memory store unavailable; proceeding without memory)\n")); } catch { /* best-effort */ }
+    }
+
+    // Mint a run id with r- prefix (session-id style) so gate observers,
+    // failure recall, remember, and sub-agents all see a session.
+    const runId = (() => {
+      const d = new Date();
+      const pad = (n: number, w = 2) => String(n).padStart(w, "0");
+      const y = d.getUTCFullYear();
+      const mo = pad(d.getUTCMonth() + 1);
+      const day = pad(d.getUTCDate());
+      const hh = pad(d.getUTCHours());
+      const mm = pad(d.getUTCMinutes());
+      const ss = pad(d.getUTCSeconds());
+      const rand = Math.floor(Math.random() * 256).toString(16).padStart(2, "0");
+      return `r-${y}${mo}${day}-${hh}${mm}${ss}${rand}`;
+    })();
+
+    const baseCtx = { workdir: process.cwd(), config, confirm, memory, sessionId: runId } as unknown as import("./tools/index.js").ToolContext;
     const tools = [
       ...createTools(baseCtx),
       ...(mcpForRun ? createGatedMcpTools(baseCtx, mcpForRun.rawTools) : []),
@@ -114,18 +139,59 @@ async function main(): Promise<void> {
     try {
       const promptModule = await import("./agent/prompt.js");
       const { loadSkillsCatalog } = await import("./skills.js");
-      const systemPrompt = promptModule.withSkills(
-        promptModule.withMcpServers(promptModule.SYSTEM_PROMPT, mcpForRun?.summaries ?? []),
-        loadSkillsCatalog(process.cwd()),
+
+      // Apply startup digest like the REPL: top 8 decision/milestone memories.
+      const digest = memory ? memory.topMemories(8) : [];
+      const systemPrompt = promptModule.withMemories(
+        promptModule.withSkills(
+          promptModule.withMcpServers(promptModule.SYSTEM_PROMPT, mcpForRun?.summaries ?? []),
+          loadSkillsCatalog(process.cwd()),
+        ),
+        digest,
       );
-      const agent = createAgent({ model, tools, systemPrompt });
+
+      const agent = createAgent({
+        model,
+        tools,
+        systemPrompt,
+        checkpointer: new MemorySaver(),
+        memory,
+        sessionId: () => runId,
+      });
       for await (const chunk of streamAgentText(agent, task, {
+        threadId: runId,
         recursionLimit: config.limits.recursionLimit,
       }))
         process.stdout.write(chunk);
       process.stdout.write("\n");
+
+      // After the stream completes: consolidate the run transcript and review
+      // its provisional memories (best-effort, never masks the run's own errors).
+      if (memory) {
+        try {
+          const state = await agent.getState({ configurable: { thread_id: runId } });
+          const messages = (state.values as { messages?: import("@langchain/core/messages").BaseMessage[] }).messages ?? [];
+          if (messages.length >= 3) {
+            const transcript = serializeThread(messages);
+            const memoryModel = getModel(config, "memory");
+            const { inserted, promoted, pruned } = await consolidateTranscript(memory, memoryModel, runId, transcript);
+            const p = makePalette(colorEnabled());
+            if (inserted > 0) {
+              process.stderr.write(p.dim(`(consolidated ${inserted} memor${inserted === 1 ? "y" : "ies"} from this run)\n`));
+            }
+            if (promoted > 0 || pruned > 0) {
+              process.stderr.write(p.dim(`(reviewed ${promoted} promoted, ${pruned} pruned)\n`));
+            }
+          }
+        } catch {
+          // best-effort
+        }
+      }
     } finally {
       if (mcpForRun) await mcpForRun.close();
+      if (memory) {
+        try { memory.close(); } catch { /* best-effort */ }
+      }
     }
     return;
   }

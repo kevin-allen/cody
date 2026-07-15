@@ -20,7 +20,7 @@ import type { ApprovalRequest, ConfirmResult } from "../tools/index.js";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createAgent, streamAgentEvents, repairDanglingToolCalls, compactThread, serializeThread } from "../agent/graph.js";
 import { createSubagentTool } from "../agent/subagent.js";
-import { consolidate, reviewSessionProvisional, findOrphanedSessions } from "../consolidate.js";
+import { consolidateTranscript, reviewSessionProvisional, findOrphanedSessions } from "../consolidate.js";
 import type { UsageTotals } from "../agent/graph.js";
 import type { SessionStore } from "../sessions.js";
 import { resolveSessionRef } from "../sessions.js";
@@ -564,30 +564,12 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
       if (messages.length < 3) return;
       const transcript = serializeThread(messages);
       const model = getModel(deps.config, "memory");
-      const records = await consolidate(model, transcript).catch(() => []);
-      let wrote = 0;
-      for (const r of records) {
-        try {
-          memory.insertMemory({ kind: r.kind, cue: r.cue ?? "", triggerText: r.triggerText, body: r.body, scope: r.scope, confidence: r.confidence ?? 1, sourceSession: id });
-          wrote += 1;
-        } catch {
-          // continue
-        }
-      }
-      if (wrote > 0) process.stdout.write(p.dim(`(consolidated ${wrote} memor${wrote === 1 ? "y" : "ies"} from this session)\n`));
-
-      // Review this session's PROVISIONAL memories against the transcript and
-      // promote confirmed ones / prune the rest. Best-effort — never breaks compaction/exit.
-      try {
-        // reuse the transcript already fetched above instead of refetching state
-        const { promoted, pruned } = await reviewSessionProvisional(memory, model, id, async () => transcript);
-        if (promoted > 0 || pruned > 0) {
-          process.stdout.write(
-            p.dim(`(reviewed ${promoted + pruned} provisional memories: ${promoted} promoted, ${pruned} pruned)\n`),
-          );
-        }
-      } catch {
-        // swallow
+      const { inserted, promoted, pruned } = await consolidateTranscript(memory, model, id, transcript);
+      if (inserted > 0) process.stdout.write(p.dim(`(consolidated ${inserted} memor${inserted === 1 ? "y" : "ies"} from this session)\n`));
+      if (promoted > 0 || pruned > 0) {
+        process.stdout.write(
+          p.dim(`(reviewed ${promoted + pruned} provisional memories: ${promoted} promoted, ${pruned} pruned)\n`),
+        );
       }
     } catch {
       // swallow
