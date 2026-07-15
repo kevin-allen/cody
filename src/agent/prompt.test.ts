@@ -7,6 +7,11 @@ describe("SYSTEM_PROMPT", () => {
     expect(SYSTEM_PROMPT).toContain("issue them together in a single response so they run in parallel");
     expect(SYSTEM_PROMPT).toContain("keep dependent calls sequential");
   });
+
+  it("mentions run_subagent delegation for broad explorations", () => {
+    expect(SYSTEM_PROMPT).toContain("run_subagent");
+    expect(SYSTEM_PROMPT).toContain("batch independent explorations into parallel run_subagent calls");
+  });
 });
 
 describe("withMcpServers (FR-44a)", () => {

@@ -63,6 +63,11 @@ export const TOOL_INFO: readonly { name: string; action: ToolAction; description
     action: "read",
     description: "Record a durable lesson for future sessions (provisional until consolidation).",
   },
+  {
+    name: "run_subagent",
+    action: "agent",
+    description: "Delegate a read-only exploration task to a sub-agent with fresh context.",
+  },
 ];
 
 /** Apply the permission policy for an action, then execute (FR-18..FR-22). */

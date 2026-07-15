@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { openMemoryStore } from "../memory.js";
-import { createTools } from "./index.js";
+import { createTools, TOOL_INFO } from "./index.js";
 import type { ToolContext } from "./index.js";
 import type { Config } from "../config.js";
 
@@ -176,5 +176,14 @@ describe("gate failure memory injection and reconsolidation", () => {
 
     store.close();
     rmSync(wd, { recursive: true, force: true });
+  });
+});
+
+describe("TOOL_INFO", () => {
+  it("contains a run_subagent entry with action 'agent'", () => {
+    const entry = TOOL_INFO.find((t) => t.name === "run_subagent");
+    expect(entry).toBeDefined();
+    expect(entry!.action).toBe("agent");
+    expect(entry!.description).toContain("sub-agent");
   });
 });

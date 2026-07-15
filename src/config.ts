@@ -16,7 +16,7 @@ export interface ModelDef {
 }
 
 export type PermissionMode = "supervised" | "auto" | "readonly";
-export type ToolAction = "read" | "write" | "edit" | "shell" | "mcp";
+export type ToolAction = "read" | "write" | "edit" | "shell" | "mcp" | "agent";
 export type ActionPolicy = "allow" | "ask" | "deny";
 
 export interface McpServerConfig {

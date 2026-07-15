@@ -42,6 +42,12 @@ describe("resolvePolicy", () => {
     expect(resolvePolicy(p, "shell")).toBe("ask");
     expect(resolvePolicy(p, "write")).toBe("allow"); // preset still applies elsewhere
   });
+
+  it("agent action: supervised=ask, auto=allow, readonly=deny", () => {
+    expect(resolvePolicy(perms({ mode: "supervised" }), "agent")).toBe("ask");
+    expect(resolvePolicy(perms({ mode: "auto" }), "agent")).toBe("allow");
+    expect(resolvePolicy(perms({ mode: "readonly" }), "agent")).toBe("deny");
+  });
 });
 
 describe("isShellDenied", () => {

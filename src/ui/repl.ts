@@ -19,6 +19,7 @@ import { createTools, createGatedMcpTools } from "../tools/index.js";
 import type { ApprovalRequest, ConfirmResult } from "../tools/index.js";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createAgent, streamAgentEvents, repairDanglingToolCalls, compactThread, serializeThread } from "../agent/graph.js";
+import { createSubagentTool } from "../agent/subagent.js";
 import { consolidate, reviewSessionProvisional, findOrphanedSessions } from "../consolidate.js";
 import type { UsageTotals } from "../agent/graph.js";
 import type { SessionStore } from "../sessions.js";
@@ -281,6 +282,20 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     ...createTools(ctx as unknown as import("../tools/index.js").ToolContext),
     ...(deps.rawMcpTools ? createGatedMcpTools(ctx as unknown as import("../tools/index.js").ToolContext, deps.rawMcpTools) : []),
   ];
+
+  // Subagent: use the "subagent" role model if configured, else the parent model.
+  const subagentModel = deps.config.roles.subagent
+    ? getModel(deps.config, "subagent")
+    : model;
+  const runSubagent = createSubagentTool({
+    model: subagentModel,
+    ctx: ctx as unknown as import("../tools/index.js").ToolContext,
+    onUsage: (usage) => {
+      sessionInputTokens += usage.inputTokens;
+      sessionOutputTokens += usage.outputTokens;
+    },
+  });
+  tools.push(runSubagent);
 
   const agent = createAgent({ model, tools, checkpointer: saver, systemPrompt, memory, sessionId: () => sessionId });
 

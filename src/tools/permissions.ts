@@ -2,9 +2,9 @@ import type { PermissionsConfig, PermissionMode, ToolAction, ActionPolicy } from
 
 /** Per-action policy for each mode preset (FR-19). */
 const PRESETS: Record<PermissionMode, Record<ToolAction, ActionPolicy>> = {
-  supervised: { read: "allow", write: "ask", edit: "ask", shell: "ask", mcp: "ask" },
-  auto: { read: "allow", write: "allow", edit: "allow", shell: "allow", mcp: "allow" },
-  readonly: { read: "allow", write: "deny", edit: "deny", shell: "deny", mcp: "deny" },
+  supervised: { read: "allow", write: "ask", edit: "ask", shell: "ask", mcp: "ask", agent: "ask" },
+  auto: { read: "allow", write: "allow", edit: "allow", shell: "allow", mcp: "allow", agent: "allow" },
+  readonly: { read: "allow", write: "deny", edit: "deny", shell: "deny", mcp: "deny", agent: "deny" },
 };
 
 /** Resolve the effective policy for an action: preset, then per-action override. */

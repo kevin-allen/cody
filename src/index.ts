@@ -8,6 +8,7 @@ import { getModel, assertToolCapable } from "./providers/factory.js";
 import { TOOL_INFO, resolvePolicy, createTools } from "./tools/index.js";
 import type { ApprovalRequest, ConfirmResult } from "./tools/index.js";
 import { createAgent, streamAgentText } from "./agent/graph.js";
+import { createSubagentTool } from "./agent/subagent.js";
 import { configureProxyFromEnv, relaxTlsVerification } from "./net/proxy.js";
 import { startRepl } from "./ui/repl.js";
 import { connectMcpServers } from "./tools/mcp.js";
@@ -103,6 +104,12 @@ async function main(): Promise<void> {
       ...createTools(baseCtx),
       ...(mcpForRun ? createGatedMcpTools(baseCtx, mcpForRun.rawTools) : []),
     ];
+
+    // Subagent for headless runs: use "subagent" role if configured, else parent model.
+    const subagentModel = config.roles.subagent
+      ? getModel(config, "subagent")
+      : model;
+    tools.push(createSubagentTool({ model: subagentModel, ctx: baseCtx }));
 
     try {
       const promptModule = await import("./agent/prompt.js");
