@@ -10,6 +10,7 @@ import type { ChatResult } from "@langchain/core/outputs";
 import { resolveConfig } from "../config.js";
 import type { ToolContext } from "../tools/index.js";
 import { READ_ONLY_TOOL_NAMES, createSubagentTool } from "./subagent.js";
+import { SUBAGENT_TAG } from "./graph.js";
 import type { UsageTotals } from "./graph.js";
 
 // ---- fake models -----------------------------------------------------------
@@ -31,6 +32,15 @@ class ScriptedModel extends BaseChatModel {
     this.index += 1;
     const text = typeof message.content === "string" ? message.content : "";
     return { generations: [{ message, text }] };
+  }
+}
+
+/** A scripted model that records the run tags its calls carry. */
+class TagRecordingModel extends ScriptedModel {
+  seenTags: string[] = [];
+  override async invoke(input: never, config?: { tags?: string[] }) {
+    this.seenTags.push(...(config?.tags ?? []));
+    return super.invoke(input, config);
   }
 }
 
@@ -141,6 +151,14 @@ describe("run_subagent tool", () => {
     expect(collected.length).toBe(1);
     expect(collected[0]!.inputTokens).toBe(100);
     expect(collected[0]!.outputTokens).toBe(50);
+  });
+
+  it("runs the sub-agent with SUBAGENT_TAG so its chunks are filtered from the parent stream", async () => {
+    const model = new TagRecordingModel([new AIMessage("report")]);
+    const tool = createSubagentTool({ model, ctx: ctx("auto") });
+
+    await tool.invoke({ task: "explore" });
+    expect(model.seenTags).toContain(SUBAGENT_TAG);
   });
 
   it("returns [denied] in readonly mode without invoking the model", async () => {

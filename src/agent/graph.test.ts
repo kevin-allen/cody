@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { BaseChatModelParams } from "@langchain/core/language_models/chat_models";
-import { AIMessage } from "@langchain/core/messages";
+import { AIMessage, AIMessageChunk, ToolMessage } from "@langchain/core/messages";
 import type { BaseMessage } from "@langchain/core/messages";
 import type { ChatResult } from "@langchain/core/outputs";
 import { resolveConfig } from "../config.js";
@@ -12,7 +12,7 @@ import { createTools } from "../tools/index.js";
 import type { ToolContext } from "../tools/index.js";
 import { MemorySaver } from "@langchain/langgraph";
 import { HumanMessage } from "@langchain/core/messages";
-import { createAgent, runAgentOnce, streamAgentEvents, repairDanglingToolCalls, extractText } from "./graph.js";
+import { createAgent, runAgentOnce, streamAgentEvents, repairDanglingToolCalls, extractText, SUBAGENT_TAG } from "./graph.js";
 import type { AgentEvent } from "./graph.js";
 
 /**
@@ -202,5 +202,48 @@ describe("repairDanglingToolCalls", () => {
     await agent.invoke({ messages: [new HumanMessage("hello")] }, config);
 
     expect(await repairDanglingToolCalls(agent, "t2")).toBe(false);
+  });
+});
+
+describe("streamAgentEvents sub-agent filtering (SUBAGENT_TAG)", () => {
+  it("drops tagged sub-agent chunks from events and usage totals", async () => {
+    // streamMode "messages" surfaces descendant-run chunks; sub-agent runs are
+    // tagged and must not contribute text, tool events, or usage to the parent.
+    const tuples: [unknown, unknown][] = [
+      [
+        new AIMessageChunk({
+          content: "parent text",
+          usage_metadata: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+        } as never),
+        { tags: ["seq:step:1"] },
+      ],
+      [
+        new AIMessageChunk({
+          content: "child text",
+          usage_metadata: { input_tokens: 5000, output_tokens: 900, total_tokens: 5900 },
+        } as never),
+        { tags: [SUBAGENT_TAG, "other"] },
+      ],
+      [new ToolMessage({ content: "child read result", tool_call_id: "child-1", name: "read_file" }), { tags: [SUBAGENT_TAG] }],
+      [new ToolMessage({ content: "parent tool ok [exit 0]", tool_call_id: "parent-1", name: "run_shell" }), { tags: [] }],
+    ];
+    const fakeAgent = {
+      stream: async () =>
+        (async function* () {
+          for (const t of tuples) yield t;
+        })(),
+    } as unknown as ReturnType<typeof createAgent>;
+
+    const events: AgentEvent[] = [];
+    let usage: { inputTokens: number; outputTokens: number } | undefined;
+    for await (const e of streamAgentEvents(fakeAgent, "task", { onUsage: (u) => (usage = u) })) {
+      events.push(e);
+    }
+
+    const texts = events.filter((e) => e.kind === "text").map((e) => (e as { text: string }).text);
+    expect(texts).toEqual(["parent text"]);
+    const toolNames = events.filter((e) => e.kind === "tool").map((e) => (e as { name: string }).name);
+    expect(toolNames).toEqual(["run_shell"]);
+    expect(usage).toEqual({ inputTokens: 10, outputTokens: 2 });
   });
 });

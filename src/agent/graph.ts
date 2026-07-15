@@ -100,6 +100,18 @@ export interface StreamOptions {
 export type Agent = ReturnType<typeof createAgent>;
 
 /**
+ * Tag attached to sub-agent runs (FR-59). streamMode "messages" surfaces chat
+ * events from ALL descendant runs — including a sub-agent running inside the
+ * run_subagent tool — so without filtering, a sub-agent's internal text, tool
+ * activity, and token usage all leak into the parent turn's stream: garbled
+ * output, clobbered tool-arg correlation, and inflated usage that mis-triggers
+ * auto-compaction. Sub-agent runs are invoked with this tag (tags are inherited
+ * by descendant runs), and streamAgentEvents drops tagged chunks; sub-agent
+ * usage reaches session totals once, via the tool's own onUsage callback.
+ */
+export const SUBAGENT_TAG = "cody-subagent";
+
+/**
  * Repair a thread whose last message is an AI message with tool calls that
  * never got tool results — what an errored or cancelled turn leaves behind.
  * Providers reject such history on every later turn, so without repair the
@@ -244,7 +256,9 @@ export async function* streamAgentEvents(
   const partialByIndex = new Map<number, { id?: string; args: string }>();
 
   for await (const chunk of stream) {
-    const msg = Array.isArray(chunk) ? chunk[0] : chunk;
+    const [msg, meta] = Array.isArray(chunk) ? chunk : [chunk, undefined];
+    const tags = (meta as { tags?: string[] } | undefined)?.tags;
+    if (tags?.includes(SUBAGENT_TAG)) continue; // sub-agent internals (see SUBAGENT_TAG)
     const type = (msg as { _getType?: () => string })._getType?.();
     const content = (msg as { content?: unknown }).content;
     if (type === "ai") {

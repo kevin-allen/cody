@@ -7,7 +7,7 @@ import type { AIMessage, BaseMessage } from "@langchain/core/messages";
 import { MemorySaver } from "@langchain/langgraph";
 import type { ToolContext } from "../tools/index.js";
 import { createTools, gate } from "../tools/index.js";
-import { createAgent, extractText } from "./graph.js";
+import { createAgent, extractText, SUBAGENT_TAG } from "./graph.js";
 import type { UsageTotals } from "./graph.js";
 
 /** Read-only tool names the subagent is allowed to use. Exported for tests. */
@@ -84,6 +84,9 @@ export function createSubagentTool(deps: SubagentDeps): StructuredToolInterface 
                 configurable: { thread_id: "subagent" },
                 recursionLimit: deps.recursionLimit,
                 signal: (config as { signal?: AbortSignal } | undefined)?.signal,
+                // Inherited by every descendant run; keeps sub-agent chunks out
+                // of the parent's stream (see SUBAGENT_TAG in graph.ts).
+                tags: [SUBAGENT_TAG],
               },
             );
 
