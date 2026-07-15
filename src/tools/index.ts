@@ -1,6 +1,7 @@
 import { tool } from "@langchain/core/tools";
-import { fingerprintError } from "../memory.js";
 import type { MemoryStore } from "../memory.js";
+import type { ToolResultObserver } from "./observers.js";
+import { defaultObservers } from "./observers.js";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 import type { Config, ToolAction } from "../config.js";
@@ -18,6 +19,8 @@ import { runShell } from "./shell.js";
 
 export { resolvePolicy, isShellDenied, isShellAllowed, isMcpAllowed, isMcpDenied } from "./permissions.js";
 export { createGatedMcpTools } from "./mcp.js";
+export { failureRecallObserver, commitMilestoneObserver, defaultObservers } from "./observers.js";
+export type { ToolResultObserver } from "./observers.js";
 
 export interface ApprovalRequest {
   readonly action: ToolAction;
@@ -42,6 +45,8 @@ export interface ToolContext {
   readonly confirm: (req: ApprovalRequest) => Promise<ConfirmResult>;
   readonly memory?: MemoryStore;
   readonly sessionId?: string;
+  /** Observers to run after tool execution (defaults to defaultObservers when omitted). */
+  readonly observers?: readonly ToolResultObserver[];
 }
 
 /** Static metadata for each tool (name, action, description) — no context needed. */
@@ -84,116 +89,17 @@ export async function gate(
   const maybe = exec();
   const result = await Promise.resolve(maybe);
 
-  try {
-    // Detect genuine failures: starts with "[error]", starts with "[timed out",
-    // or contains an exit marker with nonzero code like "[exit 1]".
-    const isFailure =
-      typeof result === "string" &&
-      (result.startsWith("[error]") || result.startsWith("[timed out") || /\[exit ([1-9][0-9]*)\]/.test(result));
-    if (isFailure && ctx.memory) {
-      try {
-        const fp = fingerprintError(result as string);
-        let finalOut = result as string;
-
-        // reconsolidation & recall + injection
-        try {
-          // 1. reconsolidation: if we injected earlier in this session, decrement confidence
-          const prior = ctx.memory.priorInjectionThisSession(ctx.sessionId, fp);
-          if (typeof prior === "number") {
-            try {
-              ctx.memory.decrementConfidence(prior);
-            } catch {
-              // swallow
-            }
-          }
-
-          // 2. recall by fingerprint, then by text fallback
-          let hit = ctx.memory.recallByFingerprint(fp, ctx.sessionId);
-          if (!hit) {
-            const byText = ctx.memory.recallByText(result as string, "failure", 1, ctx.sessionId);
-            if (byText && byText.length > 0) hit = byText[0];
-          }
-
-          // 3. if hit, augment finalOut and record recall event and touchUsed
-          if (hit) {
-            // append the memory injection visible to the model
-            finalOut = `${finalOut}\n[memory #${hit.id}] ${hit.body}`;
-            try {
-              ctx.memory.touchUsed(hit.id, new Date().toISOString());
-            } catch {
-              // swallow
-            }
-            try {
-              ctx.memory.recordRecallEvent({
-                ts: new Date().toISOString(),
-                sessionId: ctx.sessionId,
-                cueKind: "failure",
-                cueText: fp,
-                matchedIds: [hit.id],
-                injectedIds: [hit.id],
-              });
-            } catch {
-              // swallow
-            }
-          }
-
-          // finally, record the failure event with the injected_memory_id (if any)
-          try {
-            ctx.memory.recordFailureEvent({
-              ts: new Date().toISOString(),
-              sessionId: ctx.sessionId,
-              fingerprint: fp,
-              errorText: (result as string).slice(0, 2000),
-              injectedMemoryId: hit ? hit.id : undefined,
-            });
-          } catch {
-            // swallow
-          }
-
-        } catch {
-          // swallow any errors during reconsolidation/recall
-        }
-
-        // return the possibly augmented output
-        return finalOut;
-      } catch {
-        // swallow any errors from recording — logging must never break a tool
-      }
-    }
-  } catch {
-    // swallow any errors during detection/recording (shouldn't happen)
-  }
-
-  // Best-effort milestone hook: record a provisional milestone memory when a
-  // git commit shell command succeeds. Never affects the returned result.
-  if (ctx.memory) {
+  // Dispatch observers over the result; each observer can inspect or replace.
+  let out = result;
+  for (const obs of ctx.observers ?? defaultObservers) {
     try {
-      const isGitCommit = req.action === "shell" && /^\s*git\s+commit\b/.test(req.preview);
-      const isSuccess = typeof result === "string" && result.includes("[exit 0]");
-      if (isGitCommit && isSuccess) {
-        const m = req.preview.match(/-m\s+(?:"([^"]*)"|'([^']*)')/);
-        const subject = (m && (m[1] ?? m[2])) || "changes";
-        try {
-          ctx.memory.insertMemory({
-            kind: "milestone",
-            cue: `commit: ${subject.slice(0, 60)}`,
-            triggerText: subject,
-            body: `Committed: ${subject}`,
-            status: "provisional",
-            origin: "event",
-            confidence: 1,
-            sourceSession: ctx.sessionId,
-          });
-        } catch {
-          // swallow
-        }
-      }
+      const replaced = obs.observe(ctx, req, out);
+      if (typeof replaced === "string") out = replaced;
     } catch {
-      // swallow any errors during milestone detection/recording
+      // an observer must never break a tool
     }
   }
-
-  return result;
+  return out;
 }
 
 
