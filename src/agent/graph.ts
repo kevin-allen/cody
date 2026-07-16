@@ -22,6 +22,8 @@ export interface AgentDeps {
   readonly sessionId?: () => string | undefined;
   /** Optional eviction limits for mid-turn context truncation. */
   readonly eviction?: EvictionLimits;
+  /** Optional callback invoked after an eviction pass, with ids of evicted messages. */
+  readonly onEvict?: (evictedIds: string[]) => void;
 }
 
 /**
@@ -79,7 +81,7 @@ export function createAgent(deps: AgentDeps) {
     : deps.systemPrompt ?? SYSTEM_PROMPT;
   const preModelHook =
     deps.eviction && deps.eviction.evictThresholdTokens > 0
-      ? buildEvictionHook(deps.eviction)
+      ? buildEvictionHook(deps.eviction, deps.onEvict)
       : undefined;
   return createReactAgent({
     llm: deps.model,

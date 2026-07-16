@@ -323,4 +323,55 @@ describe("buildEvictionHook", () => {
     expect(ids).not.toContain("t4");
     expect(ids).not.toContain("t5");
   });
+
+  it("calls onEvict with evicted ids when eviction happens", () => {
+    const evictedIds: string[][] = [];
+    const hook = buildEvictionHook(
+      { evictThresholdTokens: 100, keepRecentToolResults: 3 },
+      (ids) => { evictedIds.push(ids); },
+    );
+    const msgs: BaseMessage[] = [
+      new HumanMessage("task"),
+      ai(150),
+      longTool("t1", "c1"),
+      ai(200),
+      longTool("t2", "c2"),
+      ai(180),
+      longTool("t3", "c3"),
+      ai(180),
+      longTool("t4", "c4"),
+      ai(180),
+      longTool("t5", "c5"),
+      ai(180),
+      longTool("t6", "c6"),
+    ];
+    hook({ messages: msgs });
+    expect(evictedIds.length).toBe(1);
+    const ids = evictedIds[0]!;
+    // t1, t2, t3 should be evicted (positions 6,5,4 — beyond keepRecent=3, not newest 2)
+    expect(ids).toContain("t1");
+    expect(ids).toContain("t2");
+    expect(ids).toContain("t3");
+    // t5, t6 are newest 2 → protected
+    expect(ids).not.toContain("t5");
+    expect(ids).not.toContain("t6");
+  });
+
+  it("does not call onEvict when nothing is evicted", () => {
+    let called = false;
+    const hook = buildEvictionHook(
+      { evictThresholdTokens: 100, keepRecentToolResults: 5 },
+      () => { called = true; },
+    );
+    // only 2 tool messages, both newest 2, no eviction
+    const msgs: BaseMessage[] = [
+      new HumanMessage("task"),
+      ai(150),
+      longTool("t1", "c1"),
+      ai(200),
+      longTool("t2", "c2"),
+    ];
+    hook({ messages: msgs });
+    expect(called).toBe(false);
+  });
 });

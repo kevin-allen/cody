@@ -18,6 +18,7 @@ export const EVICTION_MARKER = "[evicted: output truncated after later rounds â€
  */
 export function buildEvictionHook(
   limits: EvictionLimits,
+  onEvict?: (evictedIds: string[]) => void,
 ): (state: { messages: BaseMessage[] }) => { messages: BaseMessage[] } | Record<string, never> {
   return (state: { messages: BaseMessage[] }): { messages: BaseMessage[] } | Record<string, never> => {
     // 1. Disabled.
@@ -84,6 +85,13 @@ export function buildEvictionHook(
     }
 
     if (replacements.length === 0) return {};
+    if (onEvict) {
+      try {
+        onEvict(replacements.map((r) => r.id ?? ""));
+      } catch {
+        // swallow
+      }
+    }
     return { messages: replacements };
   };
 }

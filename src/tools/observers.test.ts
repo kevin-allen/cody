@@ -21,6 +21,7 @@ const cfg: Config = {
   permissions: { mode: "supervised", overrides: {}, shell: { deny: [], allow: [] }, mcp: { deny: [], allow: [] } },
   limits: { recursionLimit: 10, compactThresholdTokens: 1000, evictThresholdTokens: 32768, keepRecentToolResults: 5, shellOutputMaxChars: 30000, fileReadMaxChars: 30000 },
   sessions: { enabled: true },
+  trace: { enabled: false },
   mcp: { servers: {} },
 };
 

@@ -4,7 +4,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runCli } from "./cli.js";
 import { loadConfig, modelDefForRole } from "./config.js";
-import { getModel, assertToolCapable, describeRequestError } from "./providers/factory.js";
+import { getModel, assertToolCapable, describeRequestError, setTraceHandler } from "./providers/factory.js";
+import { openTrace } from "./trace.js";
+import type { TraceHandle } from "./trace.js";
 import { TOOL_INFO, resolvePolicy, createTools } from "./tools/index.js";
 import type { ApprovalRequest, ConfirmResult } from "./tools/index.js";
 import { createAgent, streamAgentText, serializeThread } from "./agent/graph.js";
@@ -124,6 +126,19 @@ async function main(): Promise<void> {
       return `r-${y}${mo}${day}-${hh}${mm}${ss}${rand}`;
     })();
 
+    // --- trace setup ---
+    let trace: TraceHandle | undefined;
+    if (config.trace.enabled) {
+      try {
+        trace = openTrace(join(process.cwd(), ".cody", "trace"));
+        setTraceHandler(trace.handler);
+        trace.setSession(runId);
+        process.stderr.write(`(tracing model calls to ${trace.path})\n`);
+      } catch {
+        // best-effort
+      }
+    }
+
     const baseCtx = { workdir: process.cwd(), config, confirm, memory, sessionId: runId } as unknown as import("./tools/index.js").ToolContext;
     const tools = [
       ...createTools(baseCtx),
@@ -134,7 +149,7 @@ async function main(): Promise<void> {
     const subagentModel = config.roles.subagent
       ? getModel(config, "subagent")
       : model;
-    tools.push(createSubagentTool({ model: subagentModel, ctx: baseCtx }));
+    tools.push(createSubagentTool({ model: subagentModel, ctx: baseCtx, onEvict: (ids) => { if (trace) trace.event("eviction", { evictedIds: ids }); } }));
 
     try {
       const promptModule = await import("./agent/prompt.js");
@@ -158,6 +173,7 @@ async function main(): Promise<void> {
         memory,
         sessionId: () => runId,
         eviction: config.limits,
+        onEvict: (ids) => { if (trace) trace.event("eviction", { evictedIds: ids }); },
       });
       for await (const chunk of streamAgentText(agent, task, {
         threadId: runId,
@@ -189,6 +205,9 @@ async function main(): Promise<void> {
         }
       }
     } finally {
+      if (trace) {
+        try { trace.close(); setTraceHandler(undefined); } catch { /* best-effort */ }
+      }
       if (mcpForRun) await mcpForRun.close();
       if (memory) {
         try { memory.close(); } catch { /* best-effort */ }

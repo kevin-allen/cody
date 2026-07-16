@@ -14,7 +14,9 @@ import {
   withMcpAllowPattern,
   saveMcpAllowPattern,
 } from "../config.js";
-import { getModel, assertToolCapable, describeRequestError } from "../providers/factory.js";
+import { getModel, assertToolCapable, describeRequestError, setTraceHandler } from "../providers/factory.js";
+import { openTrace } from "../trace.js";
+import type { TraceHandle } from "../trace.js";
 import { createTools, createGatedMcpTools } from "../tools/index.js";
 import type { ApprovalRequest, ConfirmResult } from "../tools/index.js";
 import type { StructuredToolInterface } from "@langchain/core/tools";
@@ -276,6 +278,7 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
   );
 
   let sessionId: string | undefined;
+  let trace: TraceHandle | undefined;
 
   // Serialize approval prompts so concurrent ask-gated calls don't fight over readline.
   let confirmChain: Promise<unknown> = Promise.resolve();
@@ -316,10 +319,11 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
       sessionOutputTokens += usage.outputTokens;
       sessionCachedInputTokens += usage.cachedInputTokens ?? 0;
     },
+    onEvict: (ids) => { if (trace) trace.event("eviction", { evictedIds: ids }); },
   });
   tools.push(runSubagent);
 
-  const agent = createAgent({ model, tools, checkpointer: saver, systemPrompt, memory, sessionId: () => sessionId, eviction: deps.config.limits });
+  const agent = createAgent({ model, tools, checkpointer: saver, systemPrompt, memory, sessionId: () => sessionId, eviction: deps.config.limits, onEvict: (ids) => { if (trace) trace.event("eviction", { evictedIds: ids }); } });
 
   // Recover a session's transcript from its own checkpointed state, for
   // reviewing PROVISIONAL memories it left behind (see reviewSessionProvisional).
@@ -346,6 +350,18 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     sessionId = deps.resumeTarget ?? store.newSessionId();
     // register only when we created a new id (i.e., no resume target)
     if (!deps.resumeTarget) store.register(sessionId);
+
+    // --- trace setup ---
+    if (deps.config.trace.enabled) {
+      try {
+        trace = openTrace(join(deps.cwd, ".cody", "trace"));
+        setTraceHandler(trace.handler);
+        trace.setSession(sessionId);
+        process.stdout.write(p.dim(`(tracing model calls to ${trace.path})\n`));
+      } catch {
+        // best-effort
+      }
+    }
     // await repair of dangling calls if resuming
     if (deps.resumeTarget) {
       try {
@@ -356,6 +372,18 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     }
     // mark that we are awaiting the first input value
     sessionFirstInputValue = null;
+  } else {
+    // no store: set up trace anyway
+    if (deps.config.trace.enabled && !trace) {
+      try {
+        trace = openTrace(join(deps.cwd, ".cody", "trace"));
+        setTraceHandler(trace.handler);
+        trace.setSession(undefined);
+        process.stdout.write(p.dim(`(tracing model calls to ${trace.path})\n`));
+      } catch {
+        // best-effort
+      }
+    }
   }
 
   // Best-effort startup orphan sweep: a session that is killed, crashes, or is
@@ -647,6 +675,7 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
       }
       sessionId = store ? newId : sessionId;
       threadId = newId;
+      if (trace) trace.setSession(sessionId);
       process.stdout.write(p.dim(`(compacted ${messageCount} messages into a new session ${newId})\n`));
     } catch (err) {
       process.stdout.write(
@@ -683,6 +712,7 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
           store.register(newId);
           threadId = newId;
           sessionId = newId;
+          if (trace) trace.setSession(newId);
           sessionFirstInputValue = null;
           process.stdout.write(p.dim("(conversation cleared, new session started)\n"));
         } else {
@@ -726,6 +756,7 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
         const id = res.id;
         sessionId = id;
         threadId = id;
+        if (trace) trace.setSession(id);
         sessionFirstInputValue = undefined;
         try {
           await repairDanglingToolCalls(agent, id);
@@ -876,6 +907,16 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
   }
   cleanupTerminal();
   process.stdout.write(p.dim("\nbye\n"));
+
+  // Close trace if open
+  try {
+    if (trace) {
+      trace.close();
+      setTraceHandler(undefined);
+    }
+  } catch {
+    // swallow
+  }
 
   // On REPL close, attempt to consolidate the thread and prune checkpoints for the current session (best-effort)
   try {

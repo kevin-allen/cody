@@ -4,9 +4,16 @@ import { ChatAnthropic } from "@langchain/anthropic";
 import { ChatOllama } from "@langchain/ollama";
 import type { Config, ModelDef } from "../config.js";
 import { modelDefForRole } from "../config.js";
+import type { BaseCallbackHandler } from "@langchain/core/callbacks/base";
 
 const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
 const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
+
+let traceHandler: BaseCallbackHandler | undefined;
+
+export function setTraceHandler(handler: BaseCallbackHandler | undefined): void {
+  traceHandler = handler;
+}
 
 export class ProviderError extends Error {}
 
@@ -54,6 +61,7 @@ export function describeRequestError(err: unknown): string {
 
 /** Construct a LangChain chat model from a model definition (FR-15). */
 export function buildModel(def: ModelDef, env: NodeJS.ProcessEnv = process.env): BaseChatModel {
+  const callbacks = traceHandler ? [traceHandler] : undefined;
   switch (def.provider) {
     case "openai":
       return new ChatOpenAI({
@@ -61,6 +69,7 @@ export function buildModel(def: ModelDef, env: NodeJS.ProcessEnv = process.env):
         temperature: def.temperature,
         maxTokens: def.maxTokens,
         apiKey: requireKey(env, "OPENAI_API_KEY", "openai"),
+        callbacks,
       });
     case "anthropic":
       return new ChatAnthropic({
@@ -68,12 +77,14 @@ export function buildModel(def: ModelDef, env: NodeJS.ProcessEnv = process.env):
         temperature: def.temperature,
         maxTokens: def.maxTokens,
         apiKey: requireKey(env, "ANTHROPIC_API_KEY", "anthropic"),
+        callbacks,
       });
     case "ollama":
       return new ChatOllama({
         model: def.model,
         temperature: def.temperature,
         baseUrl: def.baseUrl ?? env.OLLAMA_BASE_URL ?? DEFAULT_OLLAMA_BASE_URL,
+        callbacks,
       });
     case "deepseek":
       // DeepSeek exposes an OpenAI-compatible API — reuse ChatOpenAI, pointed
@@ -86,6 +97,7 @@ export function buildModel(def: ModelDef, env: NodeJS.ProcessEnv = process.env):
         configuration: {
           baseURL: def.baseUrl ?? env.DEEPSEEK_API_URL ?? DEFAULT_DEEPSEEK_BASE_URL,
         },
+        callbacks,
       });
     default: {
       const exhaustive: never = def.provider;

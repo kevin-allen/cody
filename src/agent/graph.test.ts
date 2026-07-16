@@ -462,4 +462,48 @@ describe("mid-turn eviction integration (FR-62)", () => {
       expect(content).not.toContain(EVICTION_MARKER);
     }
   });
+
+  it("calls onEvict callback with ids when eviction happens", async () => {
+    const KEEP = 1;
+    const TOTAL_TOOLS = 5;
+    // Results must exceed the hook's 600-char floor or nothing is evictable.
+    writeFileSync(join(wd, "long.txt"), "x".repeat(2000));
+    const responses: AIMessage[] = [];
+    for (let i = 0; i < TOTAL_TOOLS; i++) {
+      responses.push(
+        new AIMessage({
+          content: "",
+          tool_calls: [{ id: `c${i}`, name: "read_file", args: { path: "long.txt" } }],
+          usage_metadata: { input_tokens: 50000, output_tokens: 100, total_tokens: 50100 },
+        }),
+      );
+    }
+    responses.push(new AIMessage({ content: "All done." }));
+
+    const model = new ScriptedToolModel(responses);
+    const toolCtx = ctx("auto");
+    const checkpointer = new MemorySaver();
+    const evictedCalls: string[][] = [];
+
+    const agent = createAgent({
+      model,
+      tools: createTools(toolCtx),
+      checkpointer,
+      eviction: { evictThresholdTokens: 1000, keepRecentToolResults: KEEP },
+      onEvict: (ids) => { evictedCalls.push(ids); },
+    });
+
+    const config = { configurable: { thread_id: "onEvict-test" }, recursionLimit: 100 };
+    await agent.invoke(
+      { messages: [new HumanMessage("go")] },
+      config,
+    );
+
+    // onEvict should have been called at least once since eviction happened
+    expect(evictedCalls.length).toBeGreaterThanOrEqual(1);
+    // All callbacks should contain at least one id
+    for (const ids of evictedCalls) {
+      expect(ids.length).toBeGreaterThan(0);
+    }
+  });
 });

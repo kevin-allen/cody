@@ -100,6 +100,7 @@ describe("modelDefForRole", () => {
       permissions: DEFAULT_CONFIG.permissions,
       limits: DEFAULT_CONFIG.limits,
       sessions: DEFAULT_CONFIG.sessions,
+      trace: DEFAULT_CONFIG.trace,
       mcp: { servers: {} },
     };
     expect(() => modelDefForRole(c, "agent")).toThrow(/not in the catalog/);
@@ -252,6 +253,28 @@ describe("sessions configuration", () => {
     const c = resolveConfig({ fileConfig: { sessions: { enabled: "yes" as unknown as boolean, path: "" } } });
     expect(c.sessions.enabled).toBe(DEFAULT_CONFIG.sessions.enabled);
     expect(c.sessions.path).toBeUndefined();
+  });
+});
+
+describe("trace configuration", () => {
+  it("defaults to enabled false", () => {
+    const c = resolveConfig();
+    expect(c.trace.enabled).toBe(false);
+  });
+
+  it("can be enabled via config file", () => {
+    const c = resolveConfig({ fileConfig: { trace: { enabled: true } } });
+    expect(c.trace.enabled).toBe(true);
+  });
+
+  it("can be overridden via CODY_TRACE=1 env", () => {
+    const c = resolveConfig({ env: { CODY_TRACE: "1" } });
+    expect(c.trace.enabled).toBe(true);
+  });
+
+  it("ignores invalid values and falls back to default", () => {
+    const c = resolveConfig({ fileConfig: { trace: { enabled: "yes" as unknown as boolean } } });
+    expect(c.trace.enabled).toBe(DEFAULT_CONFIG.trace.enabled);
   });
 });
 

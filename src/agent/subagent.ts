@@ -36,6 +36,8 @@ export interface SubagentDeps {
   readonly recursionLimit?: number;
   /** Called with the subagent's summed token usage after each run. */
   readonly onUsage?: (usage: UsageTotals) => void;
+  /** Optional eviction callback forwarded to subagent's createAgent. */
+  readonly onEvict?: (evictedIds: string[]) => void;
 }
 
 const MAX_RESULT_CHARS = 8000;
@@ -82,6 +84,7 @@ export function createSubagentTool(deps: SubagentDeps): StructuredToolInterface 
             checkpointer,
             systemPrompt: SUBAGENT_SYSTEM_PROMPT,
             eviction: deps.ctx.config.limits,
+            onEvict: deps.onEvict,
           });
 
           try {

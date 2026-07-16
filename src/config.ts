@@ -74,6 +74,10 @@ export interface SessionsConfig {
   readonly path?: string;
 }
 
+export interface TraceConfig {
+  readonly enabled: boolean;
+}
+
 export interface Config {
   /** Named model catalog. Must contain a "default" entry. */
   readonly models: Record<string, ModelDef>;
@@ -82,6 +86,7 @@ export interface Config {
   readonly permissions: PermissionsConfig;
   readonly limits: LimitsConfig;
   readonly sessions: SessionsConfig;
+  readonly trace: TraceConfig;
   readonly mcp: { readonly servers: Record<string, McpServerConfig> };
 }
 
@@ -100,6 +105,7 @@ export const DEFAULT_CONFIG: Config = {
   },
   limits: { recursionLimit: 200, compactThresholdTokens: 150000, evictThresholdTokens: 49152, keepRecentToolResults: 5, shellOutputMaxChars: 30000, fileReadMaxChars: 30000 },
   sessions: { enabled: true },
+  trace: { enabled: false },
   mcp: { servers: {} },
 };
 
@@ -193,6 +199,15 @@ export function resolveConfig(inputs: ResolveInputs = {}): Config {
     path: typeof fileSessions.path === "string" && fileSessions.path.length > 0 ? fileSessions.path : undefined,
   } as SessionsConfig;
 
+  // --- trace merge ---
+  const fileTrace = fileConfig.trace ?? {};
+  let trace: TraceConfig = {
+    enabled:
+      typeof fileTrace.enabled === "boolean"
+        ? fileTrace.enabled
+        : DEFAULT_CONFIG.trace.enabled,
+  };
+
   // --- MCP servers merge ---
   const mcpServers: Record<string, McpServerConfig> = { ...DEFAULT_CONFIG.mcp.servers };
   for (const [name, def] of Object.entries(fileConfig.mcp?.servers ?? {})) {
@@ -213,6 +228,7 @@ export function resolveConfig(inputs: ResolveInputs = {}): Config {
   if (env.CODY_AGENT_MODEL) roles.agent = env.CODY_AGENT_MODEL;
   const envMode = coerceMode(env.CODY_MODE);
   if (envMode) permissions = { ...permissions, mode: envMode };
+  if (env.CODY_TRACE === "1") trace = { ...trace, enabled: true };
 
   // Substitute ${VAR} in MCP header values with env[VAR] ?? ""
   for (const name of Object.keys(mcpServers)) {
@@ -234,7 +250,7 @@ export function resolveConfig(inputs: ResolveInputs = {}): Config {
   if (flags.model) roles.agent = flags.model;
   if (flags.mode) permissions = { ...permissions, mode: flags.mode };
 
-  return { models, roles, permissions, limits, sessions, mcp: { servers: mcpServers } };
+  return { models, roles, permissions, limits, sessions, trace, mcp: { servers: mcpServers } };
 }
 
 interface Flags {
