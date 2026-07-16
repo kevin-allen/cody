@@ -12,6 +12,12 @@ describe("SYSTEM_PROMPT", () => {
     expect(SYSTEM_PROMPT).toContain("run_subagent");
     expect(SYSTEM_PROMPT).toContain("batch independent explorations into parallel run_subagent calls");
   });
+
+  it("contains the output-hygiene discipline line (FR-62)", () => {
+    expect(SYSTEM_PROMPT).toContain("When a command can produce long output, ask for the signal only");
+    expect(SYSTEM_PROMPT).toContain("use quiet/failure-only test reporters");
+    expect(SYSTEM_PROMPT).toContain("Verbose output is re-billed on every later model call");
+  });
 });
 
 describe("withMcpServers (FR-44a)", () => {

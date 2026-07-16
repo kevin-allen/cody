@@ -48,6 +48,20 @@ export interface LimitsConfig {
    * invalid values fall back to the built-in default.
    */
   readonly compactThresholdTokens: number;
+  /**
+   * Trigger mid-turn eviction when the previous call's input tokens exceed this.
+   * 0 disables eviction. File config may set a non-negative integer; invalid
+   * values fall back to the built-in default.
+   */
+  readonly evictThresholdTokens: number;
+  /** Most recent tool results kept untouched by the eviction hook. */
+  readonly keepRecentToolResults: number;
+  /**
+   * Hard cap on combined stdout+stderr per shell command in characters.
+   * 0 disables the cap. File config may set a non-negative integer; invalid
+   * values fall back to the built-in default.
+   */
+  readonly shellOutputMaxChars: number;
 }
 
 export interface SessionsConfig {
@@ -79,7 +93,7 @@ export const DEFAULT_CONFIG: Config = {
     shell: { deny: ["rm\\s+-rf\\s+/", "git\\s+push", ":\\(\\)\\s*\\{"], allow: [] },
     mcp: { deny: [], allow: [] },
   },
-  limits: { recursionLimit: 200, compactThresholdTokens: 150000 },
+  limits: { recursionLimit: 200, compactThresholdTokens: 150000, evictThresholdTokens: 32768, keepRecentToolResults: 5, shellOutputMaxChars: 30000 },
   sessions: { enabled: true },
   mcp: { servers: {} },
 };
@@ -136,6 +150,9 @@ export function resolveConfig(inputs: ResolveInputs = {}): Config {
 
   const fileRecursion = fileConfig.limits?.recursionLimit;
   const fileCompact = fileConfig.limits?.compactThresholdTokens;
+  const fileEvict = fileConfig.limits?.evictThresholdTokens;
+  const fileKeepRecent = fileConfig.limits?.keepRecentToolResults;
+  const fileShellCap = fileConfig.limits?.shellOutputMaxChars;
   const limits: LimitsConfig = {
     recursionLimit:
       typeof fileRecursion === "number" && Number.isInteger(fileRecursion) && fileRecursion > 0
@@ -145,6 +162,18 @@ export function resolveConfig(inputs: ResolveInputs = {}): Config {
       typeof fileCompact === "number" && Number.isInteger(fileCompact) && fileCompact >= 0
         ? fileCompact
         : DEFAULT_CONFIG.limits.compactThresholdTokens,
+    evictThresholdTokens:
+      typeof fileEvict === "number" && Number.isInteger(fileEvict) && fileEvict >= 0
+        ? fileEvict
+        : DEFAULT_CONFIG.limits.evictThresholdTokens,
+    keepRecentToolResults:
+      typeof fileKeepRecent === "number" && Number.isInteger(fileKeepRecent) && fileKeepRecent >= 0
+        ? fileKeepRecent
+        : DEFAULT_CONFIG.limits.keepRecentToolResults,
+    shellOutputMaxChars:
+      typeof fileShellCap === "number" && Number.isInteger(fileShellCap) && fileShellCap >= 0
+        ? fileShellCap
+        : DEFAULT_CONFIG.limits.shellOutputMaxChars,
   };
 
   const fileSessions = fileConfig.sessions ?? {};

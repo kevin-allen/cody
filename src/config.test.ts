@@ -151,6 +151,69 @@ describe("limits.compactThresholdTokens", () => {
   });
 });
 
+describe("limits.evictThresholdTokens", () => {
+  it("defaults to 32768", () => {
+    expect(resolveConfig().limits.evictThresholdTokens).toBe(32768);
+  });
+
+  it("can be overridden by the config file", () => {
+    const c = resolveConfig({ fileConfig: { limits: { evictThresholdTokens: 10000 } } });
+    expect(c.limits.evictThresholdTokens).toBe(10000);
+  });
+
+  it("accepts 0 to disable eviction", () => {
+    const c = resolveConfig({ fileConfig: { limits: { evictThresholdTokens: 0 } } });
+    expect(c.limits.evictThresholdTokens).toBe(0);
+  });
+
+  it("ignores invalid values and falls back to default", () => {
+    expect(resolveConfig({ fileConfig: { limits: { evictThresholdTokens: -5 } } }).limits.evictThresholdTokens).toBe(32768);
+    expect(resolveConfig({ fileConfig: { limits: { evictThresholdTokens: 2.5 } } }).limits.evictThresholdTokens).toBe(32768);
+  });
+});
+
+describe("limits.keepRecentToolResults", () => {
+  it("defaults to 5", () => {
+    expect(resolveConfig().limits.keepRecentToolResults).toBe(5);
+  });
+
+  it("can be overridden by the config file", () => {
+    const c = resolveConfig({ fileConfig: { limits: { keepRecentToolResults: 3 } } });
+    expect(c.limits.keepRecentToolResults).toBe(3);
+  });
+
+  it("accepts 0", () => {
+    const c = resolveConfig({ fileConfig: { limits: { keepRecentToolResults: 0 } } });
+    expect(c.limits.keepRecentToolResults).toBe(0);
+  });
+
+  it("ignores invalid values and falls back to default", () => {
+    expect(resolveConfig({ fileConfig: { limits: { keepRecentToolResults: -1 } } }).limits.keepRecentToolResults).toBe(5);
+    expect(resolveConfig({ fileConfig: { limits: { keepRecentToolResults: 2.5 } } }).limits.keepRecentToolResults).toBe(5);
+  });
+});
+
+describe("limits.shellOutputMaxChars", () => {
+  it("defaults to 30000", () => {
+    expect(resolveConfig().limits.shellOutputMaxChars).toBe(30000);
+  });
+
+  it("can be overridden by the config file", () => {
+    const c = resolveConfig({ fileConfig: { limits: { shellOutputMaxChars: 5000 } } });
+    expect(c.limits.shellOutputMaxChars).toBe(5000);
+  });
+
+  it("accepts 0 to disable the cap", () => {
+    const c = resolveConfig({ fileConfig: { limits: { shellOutputMaxChars: 0 } } });
+    expect(c.limits.shellOutputMaxChars).toBe(0);
+  });
+
+  it("ignores invalid values and falls back to default", () => {
+    expect(resolveConfig({ fileConfig: { limits: { shellOutputMaxChars: -5 } } }).limits.shellOutputMaxChars).toBe(30000);
+    expect(resolveConfig({ fileConfig: { limits: { shellOutputMaxChars: 2.5 } } }).limits.shellOutputMaxChars).toBe(30000);
+  });
+});
+
 describe("sessions configuration", () => {
   it("defaults to enabled true and no path", () => {
     const c = resolveConfig();

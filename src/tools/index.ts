@@ -257,7 +257,7 @@ export function createTools(ctx: ToolContext): StructuredToolInterface[] {
           preview: command,
           preapproved: isShellAllowed(ctx.config.permissions, command),
         },
-        () => runShell(ctx.workdir, command),
+        () => runShell(ctx.workdir, command, { outputMaxChars: ctx.config.limits.shellOutputMaxChars }),
       );
     },
     {

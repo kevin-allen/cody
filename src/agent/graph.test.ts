@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BaseChatModel } from "@langchain/core/language_models/chat_models";
@@ -14,6 +14,7 @@ import { MemorySaver } from "@langchain/langgraph";
 import { HumanMessage } from "@langchain/core/messages";
 import { createAgent, runAgentOnce, streamAgentEvents, repairDanglingToolCalls, extractText, SUBAGENT_TAG } from "./graph.js";
 import type { AgentEvent } from "./graph.js";
+import { EVICTION_MARKER } from "./context.js";
 
 /**
  * A minimal chat model that returns a scripted sequence of AI messages,
@@ -398,5 +399,67 @@ describe("streamAgentEvents contextTokens (AC-62b / FR-47)", () => {
 
     expect(usage!.contextTokens).toBe(0);
     expect(usage!.inputTokens).toBe(0);
+  });
+});
+
+describe("mid-turn eviction integration (FR-62)", () => {
+  it("evicts early tool results so the final state contains EVICTION_MARKER but last K stay intact", async () => {
+    // Create a file with long content so read_file results exceed 600 chars.
+    writeFileSync(join(wd, "long.txt"), "A".repeat(1000), "utf8");
+
+    // 8 tool calls to read_file "long.txt", each with usage_metadata above threshold.
+    // keepRecentToolResults = 2 → the last 2 tool results survive untouched.
+    const KEEP = 2;
+    const TOTAL_TOOLS = 8;
+    const responses: AIMessage[] = [];
+    for (let i = 0; i < TOTAL_TOOLS; i++) {
+      responses.push(
+        new AIMessage({
+          content: "",
+          tool_calls: [{ id: `c${i}`, name: "read_file", args: { path: "long.txt" } }],
+          usage_metadata: { input_tokens: 50000, output_tokens: 100, total_tokens: 50100 },
+        }),
+      );
+    }
+    responses.push(new AIMessage({ content: "All done." }));
+
+    const model = new ScriptedToolModel(responses);
+    const toolCtx = ctx("auto");
+    const checkpointer = new MemorySaver();
+
+    const agent = createAgent({
+      model,
+      tools: createTools(toolCtx),
+      checkpointer,
+      eviction: { evictThresholdTokens: 1000, keepRecentToolResults: KEEP },
+    });
+
+    const config = { configurable: { thread_id: "eviction-test" }, recursionLimit: 100 };
+    await agent.invoke(
+      { messages: [new HumanMessage("list dir repeatedly")] },
+      config,
+    );
+
+    // Read the final state from the checkpointer.
+    const state = await agent.getState(config);
+    const messages = (state.values as { messages: BaseMessage[] }).messages;
+
+    // Filter to ToolMessages.
+    const toolMessages = messages.filter((m) => m._getType() === "tool") as ToolMessage[];
+    expect(toolMessages.length).toBe(TOTAL_TOOLS);
+
+    // Early tool results (the first TOTAL_TOOLS - KEEP) should have EVICTION_MARKER.
+    const evicted = toolMessages.slice(0, TOTAL_TOOLS - KEEP);
+    for (const tm of evicted) {
+      const content = typeof tm.content === "string" ? tm.content : "";
+      expect(content).toContain(EVICTION_MARKER);
+    }
+
+    // The last KEEP results should NOT have EVICTION_MARKER.
+    const kept = toolMessages.slice(-KEEP);
+    for (const tm of kept) {
+      const content = typeof tm.content === "string" ? tm.content : "";
+      expect(content).not.toContain(EVICTION_MARKER);
+    }
   });
 });

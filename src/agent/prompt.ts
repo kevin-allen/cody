@@ -19,6 +19,7 @@ Working discipline:
 5. If an action is denied with a reason, change your approach according to that reason; do not retry the identical denied action.
 6. When running tests, compare test counts and report regressions honestly (do not claim success if the suite shrank).
 7. For broad explorations that would take many read/search calls (locating code across many files, summarizing a subsystem), delegate to run_subagent — batch independent explorations into parallel run_subagent calls in one response; do the reading yourself when only a few files matter.
+8. When a command can produce long output, ask for the signal only — use quiet/failure-only test reporters, filter with grep/tail, and avoid printing long lists of passing tests; you can always re-run for more detail. (Verbose output is re-billed on every later model call.)
 
 This section was distilled from failure modes observed while cody built its own features.
 Acceptance-tested: a three-part task now completes all parts and ends with an explicit checklist verification.

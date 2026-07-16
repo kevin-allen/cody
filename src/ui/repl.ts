@@ -319,7 +319,7 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
   });
   tools.push(runSubagent);
 
-  const agent = createAgent({ model, tools, checkpointer: saver, systemPrompt, memory, sessionId: () => sessionId });
+  const agent = createAgent({ model, tools, checkpointer: saver, systemPrompt, memory, sessionId: () => sessionId, eviction: deps.config.limits });
 
   // Recover a session's transcript from its own checkpointed state, for
   // reviewing PROVISIONAL memories it left behind (see reviewSessionProvisional).

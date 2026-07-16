@@ -81,6 +81,7 @@ export function createSubagentTool(deps: SubagentDeps): StructuredToolInterface 
             tools: readOnlyTools,
             checkpointer,
             systemPrompt: SUBAGENT_SYSTEM_PROMPT,
+            eviction: deps.ctx.config.limits,
           });
 
           try {

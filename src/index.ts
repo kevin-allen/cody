@@ -157,6 +157,7 @@ async function main(): Promise<void> {
         checkpointer: new MemorySaver(),
         memory,
         sessionId: () => runId,
+        eviction: config.limits,
       });
       for await (const chunk of streamAgentText(agent, task, {
         threadId: runId,

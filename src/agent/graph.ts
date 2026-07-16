@@ -5,6 +5,8 @@ import type { BaseCheckpointSaver } from "@langchain/langgraph";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { SYSTEM_PROMPT } from "./prompt.js";
+import type { EvictionLimits } from "./context.js";
+import { buildEvictionHook } from "./context.js";
 
 import { SystemMessage } from "@langchain/core/messages";
 
@@ -18,6 +20,8 @@ export interface AgentDeps {
   readonly memory?: import("../memory.js").MemoryStore;
   /** Getter for the live session id (may change on compact/resume). */
   readonly sessionId?: () => string | undefined;
+  /** Optional eviction limits for mid-turn context truncation. */
+  readonly eviction?: EvictionLimits;
 }
 
 /**
@@ -73,11 +77,16 @@ export function createAgent(deps: AgentDeps) {
   const promptArg = deps.memory
     ? (state: { messages?: BaseMessage[] }) => buildMemoryPrompt(deps.systemPrompt ?? SYSTEM_PROMPT, deps.memory, deps.sessionId, state)
     : deps.systemPrompt ?? SYSTEM_PROMPT;
+  const preModelHook =
+    deps.eviction && deps.eviction.evictThresholdTokens > 0
+      ? buildEvictionHook(deps.eviction)
+      : undefined;
   return createReactAgent({
     llm: deps.model,
     tools: deps.tools,
     prompt: promptArg,
     checkpointer: deps.checkpointer,
+    ...(preModelHook ? { preModelHook } : {}),
   });
 }
 

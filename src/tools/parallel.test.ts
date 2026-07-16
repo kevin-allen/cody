@@ -10,7 +10,7 @@ const cfg: Config = {
   models: { default: { provider: "openai", model: "gpt-4o" } },
   roles: { agent: "default" },
   permissions: { mode: "supervised", overrides: {}, shell: { deny: [], allow: [] }, mcp: { deny: [], allow: [] } },
-  limits: { recursionLimit: 10, compactThresholdTokens: 1000 },
+  limits: { recursionLimit: 10, compactThresholdTokens: 1000, evictThresholdTokens: 32768, keepRecentToolResults: 5, shellOutputMaxChars: 30000 },
   sessions: { enabled: true },
   mcp: { servers: {} },
 };
