@@ -15,12 +15,29 @@ export interface Change {
   apply(): void;
 }
 
-export function readFileWithin(workdir: string, path: string): string {
+export function readFileWithin(
+  workdir: string,
+  path: string,
+  opts?: { offset?: number; limit?: number; maxChars?: number },
+): string {
   const abs = resolveWithinWorkdir(workdir, path);
   const data = readFileSync(abs, "utf8");
-  return data.length > MAX_READ_BYTES
-    ? `${data.slice(0, MAX_READ_BYTES)}\n… [truncated at ${MAX_READ_BYTES} chars]`
-    : data;
+  const lines = data.split("\n");
+  const totalChars = data.length;
+
+  // Apply 1-based offset/limit slicing
+  const offset = opts?.offset ?? 1;
+  const limit = opts?.limit ?? lines.length;
+  const start = Math.max(0, offset - 1);
+  const end = Math.min(lines.length, start + limit);
+  const sliced = lines.slice(start, end).join("\n");
+
+  const cap = opts?.maxChars;
+  if (cap !== undefined && cap > 0 && sliced.length > cap) {
+    return `${sliced.slice(0, cap)}\n[file truncated: ${totalChars} chars total — re-read with offset/limit to see more]`;
+  }
+
+  return sliced;
 }
 
 export function listDirWithin(workdir: string, path: string): string {

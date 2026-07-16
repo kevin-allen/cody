@@ -18,6 +18,11 @@ describe("SYSTEM_PROMPT", () => {
     expect(SYSTEM_PROMPT).toContain("use quiet/failure-only test reporters");
     expect(SYSTEM_PROMPT).toContain("Verbose output is re-billed on every later model call");
   });
+
+  it("tells the model to slice large files with offset/limit (FR-62d)", () => {
+    expect(SYSTEM_PROMPT).toContain("read_file offset/limit to slice to the needed region");
+    expect(SYSTEM_PROMPT).toContain("instead of pulling the entire file into context");
+  });
 });
 
 describe("withMcpServers (FR-44a)", () => {

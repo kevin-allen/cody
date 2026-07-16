@@ -42,9 +42,11 @@ export function buildEvictionHook(
       return {};
     }
 
-    // 3. Candidates: ToolMessages EXCEPT the most recent keepRecentToolResults,
-    //    whose text content is longer than 600 chars and does NOT already
-    //    contain EVICTION_MARKER (idempotence).
+    // 3. Candidates: ToolMessages where:
+    //    - content length > 600 chars
+    //    - not already evicted (idempotence)
+    //    - NOT one of the newest 2 (always protected)
+    //    - NOT in positions 3..keepRecentToolResults AND ≤ 20000 chars
     const toolMessages: { index: number; msg: ToolMessage }[] = [];
     for (let i = 0; i < messages.length; i++) {
       const m = messages[i];
@@ -53,15 +55,24 @@ export function buildEvictionHook(
       }
     }
 
-    const keep = Math.max(0, limits.keepRecentToolResults);
-    const older = keep > 0 ? toolMessages.slice(0, -keep) : toolMessages;
-
+    const toolCount = toolMessages.length;
     const replacements: ToolMessage[] = [];
-    for (const { msg } of older) {
+    for (let i = 0; i < toolCount; i++) {
+      const entry = toolMessages[i]!;
+      const { msg } = entry;
+      const positionFromEnd = toolCount - i; // 1-based from end
+
       const content =
         typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
       if (content.length <= 600) continue;
       if (content.includes(EVICTION_MARKER)) continue; // already evicted — idempotent
+
+      // Always protect the newest 2
+      if (positionFromEnd <= 2) continue;
+
+      // Protect results 3..keepRecentToolResults if small enough
+      if (positionFromEnd <= limits.keepRecentToolResults && content.length <= 20_000) continue;
+
       const truncated = content.slice(0, 500) + "\n" + EVICTION_MARKER;
       replacements.push(
         new ToolMessage({

@@ -123,10 +123,14 @@ export function createTools(ctx: ToolContext): StructuredToolInterface[] {
     return p;
   };
   const readFile = tool(
-    ({ path }) =>
+    ({ path, offset, limit }) =>
       gate(ctx, { action: "read", title: `Read ${path}`, preview: path }, () => {
         try {
-          return readFileWithin(ctx.workdir, path);
+          return readFileWithin(ctx.workdir, path, {
+            offset: offset ?? undefined,
+            limit: limit ?? undefined,
+            maxChars: ctx.config.limits.fileReadMaxChars,
+          });
         } catch (e) {
           return friendlyError(e);
         }
@@ -134,7 +138,11 @@ export function createTools(ctx: ToolContext): StructuredToolInterface[] {
     {
       name: "read_file",
       description: "Read a UTF-8 text file within the working directory.",
-      schema: z.object({ path: z.string().describe("Path relative to the working directory.") }),
+      schema: z.object({
+        path: z.string().describe("Path relative to the working directory."),
+        offset: z.number().int().min(1).optional().describe("1-based line to start reading from."),
+        limit: z.number().int().min(1).optional().describe("Maximum number of lines to return."),
+      }),
     },
   );
 
@@ -275,7 +283,9 @@ export function createTools(ctx: ToolContext): StructuredToolInterface[] {
           /* ensure skill dir exists and is within workdir */
           resolveWithinWorkdir(ctx.workdir, `.cody/skills/${name}`);
           // read SKILL.md
-          const md = readFileWithin(ctx.workdir, `.cody/skills/${name}/SKILL.md`);
+          const md = readFileWithin(ctx.workdir, `.cody/skills/${name}/SKILL.md`, {
+            maxChars: ctx.config.limits.fileReadMaxChars,
+          });
           // strip frontmatter
           const body = md.replace(/^---[\s\S]*?---\s*/m, "");
           // list files recursively
@@ -306,7 +316,7 @@ export function createTools(ctx: ToolContext): StructuredToolInterface[] {
           // ensure within
           /* ensure path is within workdir */
           resolveWithinWorkdir(ctx.workdir, full);
-          return readFileWithin(ctx.workdir, full);
+          return readFileWithin(ctx.workdir, full, { maxChars: ctx.config.limits.fileReadMaxChars });
         } catch (e) {
           return friendlyError(e);
         }

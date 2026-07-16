@@ -214,6 +214,27 @@ describe("limits.shellOutputMaxChars", () => {
   });
 });
 
+describe("limits.fileReadMaxChars", () => {
+  it("defaults to 30000", () => {
+    expect(resolveConfig().limits.fileReadMaxChars).toBe(30000);
+  });
+
+  it("can be overridden by the config file", () => {
+    const c = resolveConfig({ fileConfig: { limits: { fileReadMaxChars: 5000 } } });
+    expect(c.limits.fileReadMaxChars).toBe(5000);
+  });
+
+  it("accepts 0 to disable the cap", () => {
+    const c = resolveConfig({ fileConfig: { limits: { fileReadMaxChars: 0 } } });
+    expect(c.limits.fileReadMaxChars).toBe(0);
+  });
+
+  it("ignores invalid values and falls back to default", () => {
+    expect(resolveConfig({ fileConfig: { limits: { fileReadMaxChars: -5 } } }).limits.fileReadMaxChars).toBe(30000);
+    expect(resolveConfig({ fileConfig: { limits: { fileReadMaxChars: 2.5 } } }).limits.fileReadMaxChars).toBe(30000);
+  });
+});
+
 describe("sessions configuration", () => {
   it("defaults to enabled true and no path", () => {
     const c = resolveConfig();

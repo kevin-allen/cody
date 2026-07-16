@@ -62,6 +62,11 @@ export interface LimitsConfig {
    * values fall back to the built-in default.
    */
   readonly shellOutputMaxChars: number;
+  /**
+   * Hard cap on file read output in characters. Full-file reads are capped
+   * at this; offset/limit slices are also subject to it. 0 disables.
+   */
+  readonly fileReadMaxChars: number;
 }
 
 export interface SessionsConfig {
@@ -93,7 +98,7 @@ export const DEFAULT_CONFIG: Config = {
     shell: { deny: ["rm\\s+-rf\\s+/", "git\\s+push", ":\\(\\)\\s*\\{"], allow: [] },
     mcp: { deny: [], allow: [] },
   },
-  limits: { recursionLimit: 200, compactThresholdTokens: 150000, evictThresholdTokens: 32768, keepRecentToolResults: 5, shellOutputMaxChars: 30000 },
+  limits: { recursionLimit: 200, compactThresholdTokens: 150000, evictThresholdTokens: 32768, keepRecentToolResults: 5, shellOutputMaxChars: 30000, fileReadMaxChars: 30000 },
   sessions: { enabled: true },
   mcp: { servers: {} },
 };
@@ -174,6 +179,12 @@ export function resolveConfig(inputs: ResolveInputs = {}): Config {
       typeof fileShellCap === "number" && Number.isInteger(fileShellCap) && fileShellCap >= 0
         ? fileShellCap
         : DEFAULT_CONFIG.limits.shellOutputMaxChars,
+    fileReadMaxChars:
+      typeof fileConfig.limits?.fileReadMaxChars === "number" &&
+        Number.isInteger(fileConfig.limits.fileReadMaxChars) &&
+        fileConfig.limits.fileReadMaxChars >= 0
+        ? fileConfig.limits.fileReadMaxChars
+        : DEFAULT_CONFIG.limits.fileReadMaxChars,
   };
 
   const fileSessions = fileConfig.sessions ?? {};
