@@ -3,13 +3,27 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { consolidate, reviewProvisional, reviewSessionProvisional, consolidateTranscript, findOrphanedSessions } from "./consolidate.js";
-import type { ConsolidationRecord } from "./consolidate.js";
+import type { ConsolidationRecord, UsageReport } from "./consolidate.js";
 import { openMemoryStore } from "./memory.js";
 
 class FakeModelOK {
   constructor(private readonly out: unknown) {}
   async invoke(_msgs: any) {
     return { content: this.out };
+  }
+}
+
+class FakeModelWithUsage {
+  constructor(private readonly out: unknown) {}
+  async invoke(_msgs: any) {
+    return {
+      content: this.out,
+      usage_metadata: {
+        input_tokens: 42,
+        output_tokens: 7,
+        input_token_details: { cache_read: 30 },
+      },
+    };
   }
 }
 
@@ -373,5 +387,39 @@ describe("consolidateTranscript", () => {
 
     const result = await consolidateTranscript(store, model, "test-session", "transcript");
     expect(result).toEqual({ inserted: 0, promoted: 0, pruned: 0 });
+  });
+});
+
+describe("onUsage callback (AC-62a side-channel accounting)", () => {
+  it("consolidate reports usage via onUsage callback", async () => {
+    const out = JSON.stringify([
+      { kind: "decision", cue: "test", body: "do the thing", confidence: 1 },
+    ]);
+    const model = new FakeModelWithUsage(out) as any;
+    let reported: UsageReport | undefined;
+    const res = await consolidate(model, "transcript", (u) => (reported = u));
+    expect(res.length).toBe(1);
+    expect(reported).toEqual({ inputTokens: 42, outputTokens: 7, cachedInputTokens: 30 });
+  });
+
+  it("reviewProvisional reports usage via onUsage callback", async () => {
+    const out = JSON.stringify([{ index: 0, verdict: "confirmed" }]);
+    const model = new FakeModelWithUsage(out) as any;
+    let reported: UsageReport | undefined;
+    const res = await reviewProvisional(model, "transcript", [{ index: 0, body: "note" }], (u) => (reported = u));
+    expect(res.length).toBe(1);
+    expect(reported).toEqual({ inputTokens: 42, outputTokens: 7, cachedInputTokens: 30 });
+  });
+
+  it("consolidateTranscript forwards onUsage to consolidate", async () => {
+    const wd = mkdtempSync(join(tmpdir(), "cody-consolidate-"));
+    const store = openMemoryStore(join(wd, "mem.db"));
+    const out = JSON.stringify([]);
+    const model = new FakeModelWithUsage(out) as any;
+    let reported: UsageReport | undefined;
+    const result = await consolidateTranscript(store, model, "test-session", "transcript", (u) => (reported = u));
+    expect(result.inserted).toBe(0);
+    expect(reported).toEqual({ inputTokens: 42, outputTokens: 7, cachedInputTokens: 30 });
+    try { rmSync(wd, { recursive: true, force: true }); } catch {}
   });
 });

@@ -44,17 +44,23 @@ const TRUNCATION_MARKER = "\n[subagent report truncated]";
 function sumUsage(messages: BaseMessage[]): UsageTotals {
   let inputTokens = 0;
   let outputTokens = 0;
+  let cachedInputTokens = 0;
+  let contextTokens = 0;
   for (const m of messages) {
     if (m._getType() !== "ai") continue;
     const usage = (m as AIMessage).usage_metadata as
-      | { input_tokens?: number; output_tokens?: number }
+      | { input_tokens?: number; output_tokens?: number; input_token_details?: { cache_read?: number } }
       | undefined;
     if (usage) {
       inputTokens += usage.input_tokens ?? 0;
       outputTokens += usage.output_tokens ?? 0;
+      if (usage.input_tokens) contextTokens = usage.input_tokens;
+      if (usage.input_token_details?.cache_read) {
+        cachedInputTokens += usage.input_token_details.cache_read;
+      }
     }
   }
-  return { inputTokens, outputTokens };
+  return { inputTokens, outputTokens, cachedInputTokens, contextTokens };
 }
 
 export function createSubagentTool(deps: SubagentDeps): StructuredToolInterface {

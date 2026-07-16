@@ -244,6 +244,159 @@ describe("streamAgentEvents sub-agent filtering (SUBAGENT_TAG)", () => {
     expect(texts).toEqual(["parent text"]);
     const toolNames = events.filter((e) => e.kind === "tool").map((e) => (e as { name: string }).name);
     expect(toolNames).toEqual(["run_shell"]);
-    expect(usage).toEqual({ inputTokens: 10, outputTokens: 2 });
+    expect(usage).toEqual({ inputTokens: 10, outputTokens: 2, cachedInputTokens: 0, contextTokens: 10 });
+  });
+});
+
+describe("streamAgentEvents cache-aware usage (AC-62c)", () => {
+  it("accumulates cache_read across chunks and sets contextTokens to last call's input", async () => {
+    // Simulate a turn with two model calls: first with cache hits, second without.
+    // Each call's final chunk carries the call's full usage_metadata.
+    const tuples: [unknown, unknown][] = [
+      [
+        new AIMessageChunk({
+          content: "first response",
+          usage_metadata: {
+            input_tokens: 100,
+            output_tokens: 50,
+            total_tokens: 150,
+            input_token_details: { cache_read: 80 },
+          },
+        } as never),
+        { tags: ["seq:step:1"] },
+      ],
+      [
+        new AIMessageChunk({
+          content: "second response",
+          usage_metadata: {
+            input_tokens: 200,
+            output_tokens: 30,
+            total_tokens: 230,
+            input_token_details: { cache_read: 150 },
+          },
+        } as never),
+        { tags: ["seq:step:3"] },
+      ],
+    ];
+    const fakeAgent = {
+      stream: async () =>
+        (async function* () {
+          for (const t of tuples) yield t;
+        })(),
+    } as unknown as ReturnType<typeof createAgent>;
+
+    let usage: { inputTokens: number; outputTokens: number; cachedInputTokens: number; contextTokens: number } | undefined;
+    for await (const _e of streamAgentEvents(fakeAgent, "task", {
+      onUsage: (u) => (usage = u),
+    })) {
+      // drain
+    }
+
+    expect(usage).toBeDefined();
+    // inputTokens = sum across both calls
+    expect(usage!.inputTokens).toBe(300);
+    expect(usage!.outputTokens).toBe(80);
+    // cachedInputTokens = sum of cache_read across both calls
+    expect(usage!.cachedInputTokens).toBe(230);
+    // contextTokens = LAST call's input_tokens (not the sum)
+    expect(usage!.contextTokens).toBe(200);
+  });
+
+  it("sets cachedInputTokens to 0 when input_token_details is absent (no NaN)", async () => {
+    const tuples: [unknown, unknown][] = [
+      [
+        new AIMessageChunk({
+          content: "response",
+          usage_metadata: { input_tokens: 50, output_tokens: 10, total_tokens: 60 },
+        } as never),
+        { tags: ["seq:step:1"] },
+      ],
+    ];
+    const fakeAgent = {
+      stream: async () =>
+        (async function* () {
+          for (const t of tuples) yield t;
+        })(),
+    } as unknown as ReturnType<typeof createAgent>;
+
+    let usage: { inputTokens: number; outputTokens: number; cachedInputTokens: number; contextTokens: number } | undefined;
+    for await (const _e of streamAgentEvents(fakeAgent, "task", {
+      onUsage: (u) => (usage = u),
+    })) {
+      // drain
+    }
+
+    expect(usage!.cachedInputTokens).toBe(0);
+    expect(usage!.contextTokens).toBe(50);
+  });
+});
+
+describe("streamAgentEvents contextTokens (AC-62b / FR-47)", () => {
+  it("contextTokens is last call's input, NOT the cumulative sum", async () => {
+    // Three model calls: first 5000 input, second 3000 input, third 140000 input.
+    // The cumulative sum = 148000, but contextTokens should = 140000 (last call).
+    // Auto-compaction should trigger on 140000, not 148000 (both > threshold in
+    // most configs, but the metric is what matters: context size, not re-send volume).
+    const tuples: [unknown, unknown][] = [
+      [
+        new AIMessageChunk({
+          content: "",
+          usage_metadata: { input_tokens: 5000, output_tokens: 100 },
+        } as never),
+        { tags: ["seq:step:1"] },
+      ],
+      [
+        new AIMessageChunk({
+          content: "",
+          usage_metadata: { input_tokens: 3000, output_tokens: 80 },
+        } as never),
+        { tags: ["seq:step:3"] },
+      ],
+      [
+        new AIMessageChunk({
+          content: "final response",
+          usage_metadata: { input_tokens: 140000, output_tokens: 200 },
+        } as never),
+        { tags: ["seq:step:5"] },
+      ],
+    ];
+    const fakeAgent = {
+      stream: async () =>
+        (async function* () {
+          for (const t of tuples) yield t;
+        })(),
+    } as unknown as ReturnType<typeof createAgent>;
+
+    let usage: { inputTokens: number; outputTokens: number; cachedInputTokens: number; contextTokens: number } | undefined;
+    for await (const _e of streamAgentEvents(fakeAgent, "task", {
+      onUsage: (u) => (usage = u),
+    })) {
+      // drain
+    }
+
+    expect(usage!.inputTokens).toBe(148000); // cumulative sum
+    expect(usage!.contextTokens).toBe(140000); // last call only — the context size
+  });
+
+  it("contextTokens is 0 when no AI chunk carries usage_metadata", async () => {
+    const tuples: [unknown, unknown][] = [
+      [new AIMessageChunk({ content: "bare chunk without usage" } as never), { tags: [] }],
+    ];
+    const fakeAgent = {
+      stream: async () =>
+        (async function* () {
+          for (const t of tuples) yield t;
+        })(),
+    } as unknown as ReturnType<typeof createAgent>;
+
+    let usage: { inputTokens: number; outputTokens: number; cachedInputTokens: number; contextTokens: number } | undefined;
+    for await (const _e of streamAgentEvents(fakeAgent, "task", {
+      onUsage: (u) => (usage = u),
+    })) {
+      // drain
+    }
+
+    expect(usage!.contextTokens).toBe(0);
+    expect(usage!.inputTokens).toBe(0);
   });
 });

@@ -80,4 +80,32 @@ describe("compactThread", () => {
     expect(res.messageCount).toBeGreaterThan(0);
     expect(res.summary).toBe("Summary from blocks.");
   });
+
+  it("reports usage via onUsage callback (AC-62a side-channel accounting)", async () => {
+    const agentModel = new ScriptedAgent(new AIMessage({ content: "Assist: done" }));
+    const agent = createAgent({ model: agentModel, tools: [], checkpointer: new MemorySaver() });
+
+    await agent.invoke({ messages: [new HumanMessage("do something")] }, { configurable: { thread_id: "A" } });
+
+    // Summarizer returns a message with usage_metadata including cache_read
+    const summarizer = new ScriptedSummarizer("summary text");
+    // Override _generate to include usage_metadata
+    const origGenerate = summarizer._generate.bind(summarizer);
+    summarizer._generate = async (msgs: unknown[]) => {
+      const result = await origGenerate(msgs);
+      // Inject usage_metadata into the message
+      const msg = result.generations[0]!.message as AIMessage;
+      (msg as any).usage_metadata = {
+        input_tokens: 35,
+        output_tokens: 12,
+        input_token_details: { cache_read: 20 },
+      };
+      return result;
+    };
+
+    let reported: { inputTokens: number; outputTokens: number; cachedInputTokens: number } | undefined;
+    const res = await compactThread(agent, summarizer as unknown as BaseChatModel, "A", "B", (u) => (reported = u));
+    expect(res.messageCount).toBeGreaterThan(0);
+    expect(reported).toEqual({ inputTokens: 35, outputTokens: 12, cachedInputTokens: 20 });
+  });
 });

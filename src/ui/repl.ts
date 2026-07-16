@@ -90,6 +90,17 @@ export function isBareQuit(input: string): boolean {
   return /^(exit|quit)$/i.test(input.trim());
 }
 
+/** Format a turn's token usage line (AC-62c). Pure helper for testing. */
+export function formatUsageLine(
+  turnIn: number,
+  turnOut: number,
+  turnCached: number,
+  sessionTotal: number,
+): string {
+  const cachedPart = turnCached > 0 ? ` (${turnCached} cached)` : "";
+  return `(tokens: ${turnIn} in${cachedPart} / ${turnOut} out - session: ${sessionTotal} total)`;
+}
+
 function helpText(p: Palette): string {
   return [
     `${p.bold("/help")}   show this help`,
@@ -303,6 +314,7 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     onUsage: (usage) => {
       sessionInputTokens += usage.inputTokens;
       sessionOutputTokens += usage.outputTokens;
+      sessionCachedInputTokens += usage.cachedInputTokens ?? 0;
     },
   });
   tools.push(runSubagent);
@@ -363,7 +375,7 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
         try {
           const reviewModel = getModel(deps.config, "memory");
           for (const sid of orphanSessionIds) {
-            await reviewSessionProvisional(mem, reviewModel, sid, getSessionTranscript).catch(() => undefined);
+            await reviewSessionProvisional(mem, reviewModel, sid, getSessionTranscript, () => {}).catch(() => undefined);
           }
         } catch {
           // best-effort
@@ -382,6 +394,7 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
   // session running totals for token usage
   let sessionInputTokens = 0;
   let sessionOutputTokens = 0;
+  let sessionCachedInputTokens = 0;
 
   const def = modelDefForRole(deps.config, "agent");
   const sessionLine = sessionId ? `${p.dim(`session: ${sessionId}`)}\n` : "";
@@ -422,6 +435,13 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
                 );
                 // invoke the chat model with an array of messages
                 const res = await titleModel.invoke([human]);
+                // Account for side-channel title model usage (AC-62a).
+                const tMeta = (res as { usage_metadata?: { input_tokens?: number; output_tokens?: number; input_token_details?: { cache_read?: number } } }).usage_metadata;
+                if (tMeta) {
+                  sessionInputTokens += tMeta.input_tokens ?? 0;
+                  sessionOutputTokens += tMeta.output_tokens ?? 0;
+                  sessionCachedInputTokens += tMeta.input_token_details?.cache_read ?? 0;
+                }
                 // chat model invoke returns a single AIMessage-like object with .content
                 const titleText = extractText((res as { content?: unknown }).content);
                 if (titleText) {
@@ -459,6 +479,7 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
         onUsage: (usage: UsageTotals) => {
           sessionInputTokens += usage.inputTokens;
           sessionOutputTokens += usage.outputTokens;
+          sessionCachedInputTokens += usage.cachedInputTokens ?? 0;
           turnUsage = usage;
           // touch the store if present; pass the first input once, then null
           if (store && sessionId) {
@@ -490,15 +511,16 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
         const sessionTotal = sessionInputTokens + sessionOutputTokens;
         process.stdout.write(
           p.dim(
-            `(tokens: ${turnUsage.inputTokens} in / ${turnUsage.outputTokens} out - session: ${sessionTotal} total)\n`,
+            formatUsageLine(turnUsage.inputTokens, turnUsage.outputTokens, turnUsage.cachedInputTokens, sessionTotal) + "\n",
           ),
         );
 
-        // Auto-compaction: if configured and this turn's context input tokens exceed the threshold,
-        // perform an inline auto-compaction. This runs before the auto-title work so the session id may change.
+        // Auto-compaction: if configured and the last call's input tokens (current context
+        // size) exceed the threshold, perform an inline auto-compaction. This runs before
+        // the auto-title work so the session id may change.
         try {
           const thresh = deps.config.limits.compactThresholdTokens;
-          if (typeof thresh === "number" && thresh > 0 && turnUsage && turnUsage.inputTokens > thresh) {
+          if (typeof thresh === "number" && thresh > 0 && turnUsage && turnUsage.contextTokens > thresh) {
             process.stdout.write(p.dim(`(context exceeds ${thresh} tokens - auto-compacting...)\n`));
             // don't let failures block the prompt; doCompact swallows errors
             await doCompact("auto");
@@ -524,6 +546,13 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
                   );
                   // invoke the chat model with an array of messages
                   const res = await titleModel.invoke([human]);
+                  // Account for side-channel title model usage (AC-62a).
+                  const tMeta = (res as { usage_metadata?: { input_tokens?: number; output_tokens?: number; input_token_details?: { cache_read?: number } } }).usage_metadata;
+                  if (tMeta) {
+                    sessionInputTokens += tMeta.input_tokens ?? 0;
+                    sessionOutputTokens += tMeta.output_tokens ?? 0;
+                    sessionCachedInputTokens += tMeta.input_token_details?.cache_read ?? 0;
+                  }
                   // chat model invoke returns a single AIMessage-like object with .content
                   const titleText = extractText((res as { content?: unknown }).content);
                   if (titleText) {
@@ -574,7 +603,12 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
       if (messages.length < 3) return;
       const transcript = serializeThread(messages);
       const model = getModel(deps.config, "memory");
-      const { inserted, promoted, pruned } = await consolidateTranscript(memory, model, id, transcript);
+      const usageSink = (u: { inputTokens: number; outputTokens: number; cachedInputTokens: number }) => {
+        sessionInputTokens += u.inputTokens;
+        sessionOutputTokens += u.outputTokens;
+        sessionCachedInputTokens += u.cachedInputTokens;
+      };
+      const { inserted, promoted, pruned } = await consolidateTranscript(memory, model, id, transcript, usageSink);
       if (inserted > 0) process.stdout.write(p.dim(`(consolidated ${inserted} memor${inserted === 1 ? "y" : "ies"} from this session)\n`));
       if (promoted > 0 || pruned > 0) {
         process.stdout.write(
@@ -597,7 +631,12 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
         // swallow
       }
       const newId = store ? store.newSessionId() : `repl-compact-${(clears += 1)}`;
-      const { messageCount, summary } = await compactThread(agent, summarizer, threadId, newId);
+      const compactUsageSink = (u: { inputTokens: number; outputTokens: number; cachedInputTokens: number }) => {
+        sessionInputTokens += u.inputTokens;
+        sessionOutputTokens += u.outputTokens;
+        sessionCachedInputTokens += u.cachedInputTokens;
+      };
+      const { messageCount, summary } = await compactThread(agent, summarizer, threadId, newId, compactUsageSink);
       if (store) {
         store.register(newId);
         try {
@@ -655,7 +694,7 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
         const sessionTotal = sessionInputTokens + sessionOutputTokens;
         process.stdout.write(
           p.dim(
-            `(tokens: ${sessionInputTokens} in / ${sessionOutputTokens} out - session: ${sessionTotal} total)\n`,
+            formatUsageLine(sessionInputTokens, sessionOutputTokens, sessionCachedInputTokens, sessionTotal) + "\n",
           ),
         );
         break;

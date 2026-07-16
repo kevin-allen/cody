@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseSlash, isBareQuit } from "./repl.js";
+import { parseSlash, isBareQuit, formatUsageLine } from "./repl.js";
 
 // Adjust tests to the new parseSlash signature returning { cmd, arg? }
 
@@ -68,5 +68,17 @@ describe("parseSlash compact", () => {
     const p = parseSlash("/compact");
     expect(p.cmd).toBe("compact");
     expect(p.arg).toBeUndefined();
+  });
+});
+
+describe("formatUsageLine (AC-62c)", () => {
+  it("formats with cached tokens when nonzero", () => {
+    const line = formatUsageLine(1000, 200, 500, 5000);
+    expect(line).toBe("(tokens: 1000 in (500 cached) / 200 out - session: 5000 total)");
+  });
+
+  it("omits the cached part when zero", () => {
+    const line = formatUsageLine(300, 50, 0, 1200);
+    expect(line).toBe("(tokens: 300 in / 50 out - session: 1200 total)");
   });
 });

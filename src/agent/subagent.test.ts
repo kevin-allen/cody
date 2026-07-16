@@ -151,6 +151,8 @@ describe("run_subagent tool", () => {
     expect(collected.length).toBe(1);
     expect(collected[0]!.inputTokens).toBe(100);
     expect(collected[0]!.outputTokens).toBe(50);
+    expect(collected[0]!.cachedInputTokens).toBe(0);
+    expect(collected[0]!.contextTokens).toBe(100);
   });
 
   it("runs the sub-agent with SUBAGENT_TAG so its chunks are filtered from the parent stream", async () => {

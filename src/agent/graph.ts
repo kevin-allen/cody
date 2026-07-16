@@ -84,6 +84,10 @@ export function createAgent(deps: AgentDeps) {
 export interface UsageTotals {
   inputTokens: number;
   outputTokens: number;
+  /** Cache-read tokens reported via usage_metadata.input_token_details.cache_read (AC-62c). */
+  cachedInputTokens: number;
+  /** Input tokens of the LAST model call in the turn — the current context size (AC-62b). */
+  contextTokens: number;
 }
 
 export interface StreamOptions {
@@ -250,6 +254,8 @@ export async function* streamAgentEvents(
   );
   let inputTokens = 0;
   let outputTokens = 0;
+  let cachedInputTokens = 0;
+  let contextTokens = 0;
   // Tool arguments arrive on AI chunks (whole, or streamed piecewise); the
   // matching result arrives later as a ToolMessage — correlate by call id.
   const argsByCallId = new Map<string, string>();
@@ -264,11 +270,17 @@ export async function* streamAgentEvents(
     if (type === "ai") {
       // usage_metadata often rides on chunks with empty text (tool-call and
       // final chunks), so accumulate before the text check.
-      const usage = (msg as { usage_metadata?: { input_tokens?: number; output_tokens?: number } })
+      const usage = (msg as { usage_metadata?: { input_tokens?: number; output_tokens?: number; input_token_details?: { cache_read?: number } } })
         .usage_metadata;
       if (usage) {
         inputTokens += usage.input_tokens ?? 0;
         outputTokens += usage.output_tokens ?? 0;
+        // Last call's input_tokens = current context size (AC-62b).
+        if (usage.input_tokens) contextTokens = usage.input_tokens;
+        // Cache-read tokens (AC-62c). Treat absent as 0.
+        if (usage.input_token_details?.cache_read) {
+          cachedInputTokens += usage.input_token_details.cache_read;
+        }
       }
       const calls = (msg as { tool_calls?: { id?: string; args?: unknown }[] }).tool_calls ?? [];
       for (const call of calls) {
@@ -312,7 +324,7 @@ export async function* streamAgentEvents(
   }
 
   if (opts.onUsage) {
-    opts.onUsage({ inputTokens, outputTokens });
+    opts.onUsage({ inputTokens, outputTokens, cachedInputTokens, contextTokens });
   }
 }
 
@@ -340,6 +352,7 @@ export async function compactThread(
   summarizer: BaseChatModel,
   fromThreadId: string,
   toThreadId: string,
+  onUsage?: (u: { inputTokens: number; outputTokens: number; cachedInputTokens: number }) => void,
 ): Promise<{ messageCount: number; summary: string }> {
   const config = { configurable: { thread_id: fromThreadId } };
   const state = await agent.getState(config);
@@ -353,6 +366,16 @@ export async function compactThread(
   // Invoke the summarizer with a single HumanMessage. Call invoke as a
   // method on the summarizer (do not detach).
   const res = await summarizer.invoke([new HumanMessage(prompt)]);
+  if (onUsage) {
+    const meta = (res as { usage_metadata?: { input_tokens?: number; output_tokens?: number; input_token_details?: { cache_read?: number } } }).usage_metadata;
+    if (meta) {
+      onUsage({
+        inputTokens: meta.input_tokens ?? 0,
+        outputTokens: meta.output_tokens ?? 0,
+        cachedInputTokens: meta.input_token_details?.cache_read ?? 0,
+      });
+    }
+  }
   const summary = extractText((res as { content?: unknown }).content);
   if (!summary) throw new Error("summarizer returned empty content");
 

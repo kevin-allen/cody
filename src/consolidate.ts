@@ -15,11 +15,27 @@ export type ConsolidationRecord = {
 const INSTRUCTION =
   "You are a memory consolidator for a coding agent. Read the session transcript below and extract only durable, reusable lessons worth recalling in FUTURE sessions. Output ONLY a JSON array (no prose, no code fences). Each element must be an object: {\"kind\": one of \"failure\"|\"decision\"|\"milestone\", \"cue\": a short trigger phrase, \"triggerText\": keywords or an error signature to search on, \"body\": the lesson in <= 60 words, actionable, \"scope\": optional context tag, \"confidence\": 1}. RULES: (1) Emit [] for routine sessions with nothing durable to learn — most sessions should yield 0 or 1 records. (2) For a \"failure\" record, emit it ONLY if the transcript shows the failure was actually RESOLVED — a fix was applied and the same operation then succeeded. Never record a failure whose fix was not confirmed to work. (3) Never include secrets, tokens, API keys, or large file contents. (4) Prefer environment quirks, confirmed fixes, and decisions-with-rationale. TRANSCRIPT:\n";
 
-export async function consolidate(model: BaseChatModel, transcript: string): Promise<ConsolidationRecord[]> {
+export type UsageReport = { inputTokens: number; outputTokens: number; cachedInputTokens: number };
+
+export async function consolidate(
+  model: BaseChatModel,
+  transcript: string,
+  onUsage?: (u: UsageReport) => void,
+): Promise<ConsolidationRecord[]> {
   try {
     const message = new HumanMessage(INSTRUCTION + transcript);
     // call invoke as a method on the model
     const res = await (model as any).invoke([message]);
+    if (onUsage) {
+      const meta = (res as { usage_metadata?: { input_tokens?: number; output_tokens?: number; input_token_details?: { cache_read?: number } } }).usage_metadata;
+      if (meta) {
+        onUsage({
+          inputTokens: meta.input_tokens ?? 0,
+          outputTokens: meta.output_tokens ?? 0,
+          cachedInputTokens: meta.input_token_details?.cache_read ?? 0,
+        });
+      }
+    }
     const contentStr = extractText((res as { content?: unknown }).content);
 
     // extract first '[' to last ']' substring
@@ -67,12 +83,23 @@ export async function reviewProvisional(
   model: BaseChatModel,
   transcript: string,
   items: { index: number; body: string }[],
+  onUsage?: (u: UsageReport) => void,
 ): Promise<ProvisionalVerdict[]> {
   if (items.length === 0) return [];
   try {
     const notes = items.map((i) => `${i.index}. ${i.body}`).join("\n");
     const message = new HumanMessage(REVIEW_INSTRUCTION + notes + "\n\nTRANSCRIPT:\n" + transcript);
     const res = await (model as any).invoke([message]);
+    if (onUsage) {
+      const meta = (res as { usage_metadata?: { input_tokens?: number; output_tokens?: number; input_token_details?: { cache_read?: number } } }).usage_metadata;
+      if (meta) {
+        onUsage({
+          inputTokens: meta.input_tokens ?? 0,
+          outputTokens: meta.output_tokens ?? 0,
+          cachedInputTokens: meta.input_token_details?.cache_read ?? 0,
+        });
+      }
+    }
     const contentStr = extractText((res as { content?: unknown }).content);
 
     const first = contentStr.indexOf("[");
@@ -122,6 +149,7 @@ export async function reviewSessionProvisional(
   model: BaseChatModel,
   sessionId: string,
   getTranscript: (sessionId: string) => Promise<string | undefined>,
+  onUsage?: (u: UsageReport) => void,
 ): Promise<{ promoted: number; pruned: number }> {
   const provisional = memory.listProvisional().filter((m) => m.sourceSession === sessionId);
   if (provisional.length === 0) return { promoted: 0, pruned: 0 };
@@ -138,6 +166,7 @@ export async function reviewSessionProvisional(
     model,
     transcript,
     provisional.map((m, i) => ({ index: i, body: m.body })),
+    onUsage,
   ).catch(() => []);
 
   let promoted = 0;
@@ -191,9 +220,10 @@ export async function consolidateTranscript(
   model: BaseChatModel,
   sessionId: string,
   transcript: string,
+  onUsage?: (u: UsageReport) => void,
 ): Promise<{ inserted: number; promoted: number; pruned: number }> {
   try {
-    const records = await consolidate(model, transcript).catch(() => []);
+    const records = await consolidate(model, transcript, onUsage).catch(() => []);
     let inserted = 0;
     for (const r of records) {
       try {
@@ -214,7 +244,7 @@ export async function consolidateTranscript(
     let promoted = 0;
     let pruned = 0;
     try {
-      const result = await reviewSessionProvisional(memory, model, sessionId, async () => transcript);
+      const result = await reviewSessionProvisional(memory, model, sessionId, async () => transcript, onUsage);
       promoted = result.promoted;
       pruned = result.pruned;
     } catch {

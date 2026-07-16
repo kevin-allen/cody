@@ -174,7 +174,7 @@ async function main(): Promise<void> {
           if (messages.length >= 3) {
             const transcript = serializeThread(messages);
             const memoryModel = getModel(config, "memory");
-            const { inserted, promoted, pruned } = await consolidateTranscript(memory, memoryModel, runId, transcript);
+            const { inserted, promoted, pruned } = await consolidateTranscript(memory, memoryModel, runId, transcript, () => {});
             const p = makePalette(colorEnabled());
             if (inserted > 0) {
               process.stderr.write(p.dim(`(consolidated ${inserted} memor${inserted === 1 ? "y" : "ies"} from this run)\n`));
