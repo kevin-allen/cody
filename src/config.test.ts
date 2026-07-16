@@ -152,8 +152,8 @@ describe("limits.compactThresholdTokens", () => {
 });
 
 describe("limits.evictThresholdTokens", () => {
-  it("defaults to 32768", () => {
-    expect(resolveConfig().limits.evictThresholdTokens).toBe(32768);
+  it("defaults to 49152", () => {
+    expect(resolveConfig().limits.evictThresholdTokens).toBe(49152);
   });
 
   it("can be overridden by the config file", () => {
@@ -167,8 +167,8 @@ describe("limits.evictThresholdTokens", () => {
   });
 
   it("ignores invalid values and falls back to default", () => {
-    expect(resolveConfig({ fileConfig: { limits: { evictThresholdTokens: -5 } } }).limits.evictThresholdTokens).toBe(32768);
-    expect(resolveConfig({ fileConfig: { limits: { evictThresholdTokens: 2.5 } } }).limits.evictThresholdTokens).toBe(32768);
+    expect(resolveConfig({ fileConfig: { limits: { evictThresholdTokens: -5 } } }).limits.evictThresholdTokens).toBe(49152);
+    expect(resolveConfig({ fileConfig: { limits: { evictThresholdTokens: 2.5 } } }).limits.evictThresholdTokens).toBe(49152);
   });
 });
 

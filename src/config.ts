@@ -98,7 +98,7 @@ export const DEFAULT_CONFIG: Config = {
     shell: { deny: ["rm\\s+-rf\\s+/", "git\\s+push", ":\\(\\)\\s*\\{"], allow: [] },
     mcp: { deny: [], allow: [] },
   },
-  limits: { recursionLimit: 200, compactThresholdTokens: 150000, evictThresholdTokens: 32768, keepRecentToolResults: 5, shellOutputMaxChars: 30000, fileReadMaxChars: 30000 },
+  limits: { recursionLimit: 200, compactThresholdTokens: 150000, evictThresholdTokens: 49152, keepRecentToolResults: 5, shellOutputMaxChars: 30000, fileReadMaxChars: 30000 },
   sessions: { enabled: true },
   mcp: { servers: {} },
 };
