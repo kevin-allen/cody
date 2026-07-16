@@ -57,4 +57,41 @@ terminal build stays deliberately simple (see §10).
 - The REPL's approval prompt supports the `[y/N/a]` always-allow option for MCP tools; choosing `a` adds a regex-anchored allow pattern for the tool name to `permissions.mcp.allow` in `cody.config.json`.
 - Connection failures degrade to a stderr warning; the rest of cody remains usable.
 
+## FR-62 — Token usage: accurate accounting and a ≥50% cut in billed input
+
+**Motivation (measured).** Implementing FR-15's side-channel fix (commit
+37c3ef2) in one REPL turn, cody reported `5,104,399 in / 8,797 out`; the
+DeepSeek dashboard recorded **2,500,000 in / 4,833 out** for the same work —
+cody over-reports by ~2x, and even the true 2.5M input is disproportionate to
+a ~130-line diff. Competitive agents spend materially less for equivalent
+work; target is **at least a 50% reduction in billed input tokens** on
+comparable tasks, plus trustworthy reporting.
+
+- **AC-62a (accounting):** usage reported by cody matches the provider
+  dashboard within a few percent. Investigate the ~2x double-count in
+  `streamAgentEvents`' per-chunk `usage_metadata` accumulation (usage likely
+  counted on both partial and final chunks of the same call). The session
+  totals and the auto-compact trigger consume this same counter, so the fix
+  gates the ACs below.
+- **AC-62b (compact metric):** auto-compaction triggers on the *current
+  context size* (the last model call's input tokens), not the cumulative sum
+  across all calls in a turn. Today a 30-round turn with a 25k context "exceeds"
+  a 150k threshold and compacts needlessly, while a single-call 140k-context
+  turn never triggers.
+- **AC-62c (cache visibility):** the usage line splits cached from fresh input
+  on providers that report it (DeepSeek `prompt_cache_hit_tokens`, Anthropic
+  `cache_read_input_tokens`, OpenAI `cached_tokens`), e.g.
+  `(tokens: 2.5M in (2.1M cached) / 4.8k out)`. Cached input bills at ~1/10th;
+  the current single number wildly overstates cost.
+- **AC-62d (the 50% cut):** a comparable multi-file fix-plus-tests turn
+  consumes ≤50% of the FR-62 baseline's billed input tokens. Levers, in
+  expected order of impact: evict or truncate stale tool results mid-turn
+  (verbose test output and full file reads are re-billed on every subsequent
+  round); delegate broad exploration to `run_subagent` so large reads never
+  enter the parent transcript (system-prompt discipline #7 exists — verify it
+  fires in practice); compact mid-turn when AC-62b's metric crosses the
+  threshold instead of only at turn boundaries.
+- Baseline for AC-62d: the 37c3ef2 turn (2.5M billed input, DeepSeek
+  deepseek-v4-pro, supervised mode, 238-test suite).
+
 <!-- end additions -->
