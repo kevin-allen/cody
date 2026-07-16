@@ -14,7 +14,7 @@ import {
   withMcpAllowPattern,
   saveMcpAllowPattern,
 } from "../config.js";
-import { getModel, assertToolCapable } from "../providers/factory.js";
+import { getModel, assertToolCapable, describeRequestError } from "../providers/factory.js";
 import { createTools, createGatedMcpTools } from "../tools/index.js";
 import type { ApprovalRequest, ConfirmResult } from "../tools/index.js";
 import type { StructuredToolInterface } from "@langchain/core/tools";
@@ -550,7 +550,7 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
       }
     } catch (err) {
       if (currentAbort.signal.aborted) process.stdout.write(`\n${p.dim("(cancelled)")}\n`);
-      else process.stdout.write(`\n${p.red("error:")} ${(err as Error).message}\n`);
+      else process.stdout.write(`\n${p.red("error:")} ${describeRequestError(err)}\n`);
       // A turn that died mid tool-call leaves dangling tool_calls in the
       // thread, which providers reject on every later turn — repair it so the
       // conversation stays usable (FR-27). Best effort.

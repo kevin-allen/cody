@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runCli } from "./cli.js";
 import { loadConfig, modelDefForRole } from "./config.js";
-import { getModel, assertToolCapable } from "./providers/factory.js";
+import { getModel, assertToolCapable, describeRequestError } from "./providers/factory.js";
 import { TOOL_INFO, resolvePolicy, createTools } from "./tools/index.js";
 import type { ApprovalRequest, ConfirmResult } from "./tools/index.js";
 import { createAgent, streamAgentText, serializeThread } from "./agent/graph.js";
@@ -406,6 +406,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
-  process.stderr.write(`cody: ${(err as Error).message}\n`);
+  process.stderr.write(`cody: ${describeRequestError(err)}\n`);
   process.exitCode = 1;
 });

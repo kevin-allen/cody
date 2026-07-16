@@ -10,14 +10,46 @@ const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 
 export class ProviderError extends Error {}
 
+// Whitespace and zero-width characters (U+200B..U+200D, U+FEFF, U+00A0) ride
+// along invisibly when a key is copied from a web console or email. They are
+// never part of a real key, so strip them rather than fail.
+const INVISIBLE_CHARS = /[\s\u00A0\u200B-\u200D\uFEFF]/g;
+
 function requireKey(env: NodeJS.ProcessEnv, name: string, provider: string): string {
-  const value = env[name];
+  const value = (env[name] ?? "").replace(INVISIBLE_CHARS, "");
   if (!value) {
     throw new ProviderError(
       `Missing ${name} for the "${provider}" provider. Set it in your .env file (see .env.example).`,
     );
   }
+  // HTTP header values must be Latin-1; a stray non-ASCII character would only
+  // surface later as fetch's cryptic "Cannot convert argument to a ByteString".
+  const bad = [...value].find((c) => c.charCodeAt(0) > 255);
+  if (bad) {
+    const code = bad.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0");
+    throw new ProviderError(
+      `${name} contains a non-ASCII character (U+${code}), likely picked up when the key was copied. Re-copy or retype it in .env.`,
+    );
+  }
   return value;
+}
+
+/**
+ * Translate low-level request errors into actionable messages. fetch rejects a
+ * non-Latin-1 HTTP header value with "Cannot convert argument to a ByteString"
+ * — which in practice means an API key or configured header (e.g. an MCP
+ * server header) contains an invisible non-ASCII character.
+ */
+export function describeRequestError(err: unknown): string {
+  const msg = (err as Error)?.message ?? String(err);
+  if (msg.includes("Cannot convert argument to a ByteString")) {
+    return (
+      msg +
+      "\n(an HTTP header contains a non-ASCII character — usually an API key in .env," +
+      " or an MCP server header, copied with an invisible character; re-copy it)"
+    );
+  }
+  return msg;
 }
 
 /** Construct a LangChain chat model from a model definition (FR-15). */
