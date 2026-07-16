@@ -7,7 +7,7 @@ import type { ConsolidationRecord } from "./consolidate.js";
 import { openMemoryStore } from "./memory.js";
 
 class FakeModelOK {
-  constructor(private readonly out: string) {}
+  constructor(private readonly out: unknown) {}
   async invoke(_msgs: any) {
     return { content: this.out };
   }
@@ -55,6 +55,17 @@ describe("consolidate", () => {
     const model = new FakeModelOK("I did stuff") as any;
     const res = await consolidate(model, "t");
     expect(res.length).toBe(0);
+  });
+
+  it("extracts content from Anthropic-style array blocks (FR-15: provider-agnostic content handling)", async () => {
+    const out = JSON.stringify([
+      { kind: "decision", cue: "from-array", triggerText: "x", body: "works with array blocks", confidence: 1 },
+    ]);
+    // Simulate Anthropic-style content-block array response
+    const model = new FakeModelOK([{ type: "text", text: out }, { type: "tool_use", name: "x" }]) as any;
+    const res = await consolidate(model, "transcript");
+    expect(res.length).toBe(1);
+    expect(res[0]!.cue).toBe("from-array");
   });
 
   it("drops invalid elements", async () => {
@@ -127,6 +138,22 @@ describe("reviewProvisional", () => {
     ]);
     expect(res.length).toBe(1);
     expect(res[0]).toEqual({ index: 0, verdict: "confirmed" });
+  });
+
+  it("extracts content from Anthropic-style array blocks", async () => {
+    const out = JSON.stringify([
+      { index: 0, verdict: "confirmed" },
+      { index: 1, verdict: "wrong" },
+    ]);
+    // Simulate Anthropic-style content-block array response
+    const model = new FakeModelOK([{ type: "text", text: out }, { type: "tool_use", name: "x" }]) as any;
+    const res = await reviewProvisional(model, "transcript", [
+      { index: 0, body: "note a" },
+      { index: 1, body: "note b" },
+    ]);
+    expect(res.length).toBe(2);
+    expect(res[0]).toEqual({ index: 0, verdict: "confirmed" });
+    expect(res[1]).toEqual({ index: 1, verdict: "wrong" });
   });
 });
 

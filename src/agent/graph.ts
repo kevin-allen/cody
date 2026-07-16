@@ -353,9 +353,8 @@ export async function compactThread(
   // Invoke the summarizer with a single HumanMessage. Call invoke as a
   // method on the summarizer (do not detach).
   const res = await summarizer.invoke([new HumanMessage(prompt)]);
-  const content = (res as { content?: unknown }).content;
-  if (typeof content !== "string") throw new Error("summarizer returned non-string content");
-  const summary = content;
+  const summary = extractText((res as { content?: unknown }).content);
+  if (!summary) throw new Error("summarizer returned empty content");
 
   // Seed the new thread with the summary as a HumanMessage.
   await agent.updateState({ configurable: { thread_id: toThreadId } }, { messages: [new HumanMessage("[Summary of the previous conversation]\n" + summary)] });

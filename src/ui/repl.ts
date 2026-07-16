@@ -18,7 +18,7 @@ import { getModel, assertToolCapable } from "../providers/factory.js";
 import { createTools, createGatedMcpTools } from "../tools/index.js";
 import type { ApprovalRequest, ConfirmResult } from "../tools/index.js";
 import type { StructuredToolInterface } from "@langchain/core/tools";
-import { createAgent, streamAgentEvents, repairDanglingToolCalls, compactThread, serializeThread } from "../agent/graph.js";
+import { createAgent, streamAgentEvents, repairDanglingToolCalls, compactThread, serializeThread, extractText } from "../agent/graph.js";
 import { createSubagentTool } from "../agent/subagent.js";
 import { consolidateTranscript, reviewSessionProvisional, findOrphanedSessions } from "../consolidate.js";
 import type { UsageTotals } from "../agent/graph.js";
@@ -423,9 +423,9 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
                 // invoke the chat model with an array of messages
                 const res = await titleModel.invoke([human]);
                 // chat model invoke returns a single AIMessage-like object with .content
-                const content = (res as { content?: unknown }).content;
-                if (typeof content === "string") {
-                  const t = sanitizeTitle(content);
+                const titleText = extractText((res as { content?: unknown }).content);
+                if (titleText) {
+                  const t = sanitizeTitle(titleText);
                   if (t && t.length > 0) {
                     try {
                       store.setTitle(sessionId!, t);
@@ -525,9 +525,9 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
                   // invoke the chat model with an array of messages
                   const res = await titleModel.invoke([human]);
                   // chat model invoke returns a single AIMessage-like object with .content
-                  const content = (res as { content?: unknown }).content;
-                  if (typeof content === "string") {
-                    const t = sanitizeTitle(content);
+                  const titleText = extractText((res as { content?: unknown }).content);
+                  if (titleText) {
+                    const t = sanitizeTitle(titleText);
                     if (t && t.length > 0) {
                       try {
                         store.setTitle(sessionId!, t);

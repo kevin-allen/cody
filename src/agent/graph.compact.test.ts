@@ -63,4 +63,21 @@ describe("compactThread", () => {
     expect(first?._getType && first._getType()).toBe("human");
     expect(typeof first?.content === "string" ? first.content : "").toContain("[Summary of the previous conversation]\nThis is the summary.");
   });
+
+  it("handles Anthropic-style array content blocks in the summarizer response", async () => {
+    const agentModel = new ScriptedAgent(new AIMessage({ content: "Assist: done" }));
+    const agent = createAgent({ model: agentModel, tools: [], checkpointer: new MemorySaver() });
+
+    // run one turn in thread A
+    await agent.invoke({ messages: [new HumanMessage("do something")] }, { configurable: { thread_id: "A" } });
+
+    // Summarizer returns Anthropic-style content blocks (array of objects)
+    const summarizer = new ScriptedSummarizer(
+      [{ type: "text", text: "Summary from blocks." }, { type: "tool_use", name: "unrelated" }] as unknown as string,
+    );
+
+    const res = await compactThread(agent, summarizer, "A", "B");
+    expect(res.messageCount).toBeGreaterThan(0);
+    expect(res.summary).toBe("Summary from blocks.");
+  });
 });

@@ -1,6 +1,7 @@
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { HumanMessage } from "@langchain/core/messages";
 import type { MemoryStore } from "./memory.js";
+import { extractText } from "./agent/graph.js";
 
 export type ConsolidationRecord = {
   kind: "failure" | "decision" | "milestone";
@@ -19,11 +20,7 @@ export async function consolidate(model: BaseChatModel, transcript: string): Pro
     const message = new HumanMessage(INSTRUCTION + transcript);
     // call invoke as a method on the model
     const res = await (model as any).invoke([message]);
-    const contentRaw = (res as { content?: unknown }).content;
-    let contentStr = "";
-    if (typeof contentRaw === "string") contentStr = contentRaw;
-    else if (Array.isArray(contentRaw)) contentStr = contentRaw.map((p) => String(p)).join("\n");
-    else if (contentRaw !== undefined && contentRaw !== null) contentStr = String(contentRaw);
+    const contentStr = extractText((res as { content?: unknown }).content);
 
     // extract first '[' to last ']' substring
     const first = contentStr.indexOf("[");
@@ -76,11 +73,7 @@ export async function reviewProvisional(
     const notes = items.map((i) => `${i.index}. ${i.body}`).join("\n");
     const message = new HumanMessage(REVIEW_INSTRUCTION + notes + "\n\nTRANSCRIPT:\n" + transcript);
     const res = await (model as any).invoke([message]);
-    const contentRaw = (res as { content?: unknown }).content;
-    let contentStr = "";
-    if (typeof contentRaw === "string") contentStr = contentRaw;
-    else if (Array.isArray(contentRaw)) contentStr = contentRaw.map((p) => String(p)).join("\n");
-    else if (contentRaw !== undefined && contentRaw !== null) contentStr = String(contentRaw);
+    const contentStr = extractText((res as { content?: unknown }).content);
 
     const first = contentStr.indexOf("[");
     const last = contentStr.lastIndexOf("]");
